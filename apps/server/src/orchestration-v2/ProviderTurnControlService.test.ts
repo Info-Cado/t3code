@@ -694,6 +694,30 @@ it.effect("ends the run of a stopped turn its adapter settled unseen", () =>
       },
       subagent(nativeSubagentId, "provider_native"),
       subagent(appOwnedSubagentId, "app_owned"),
+      ...[nativeSubagentId, appOwnedSubagentId].map((id): OrchestrationV2DomainEvent => ({
+        ...common,
+        id: EventId.make(`event:${id}:node`),
+        type: "node.updated",
+        runId,
+        nodeId: id,
+        payload: {
+          id,
+          threadId,
+          runId,
+          parentNodeId: rootNodeId,
+          rootNodeId,
+          kind: "subagent",
+          status: "running",
+          countsForRun: false,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          runtimeRequestId: null,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: null,
+        },
+      })),
       {
         ...common,
         id: EventId.make("event:orphaned-stop:request-node"),
@@ -769,6 +793,9 @@ it.effect("ends the run of a stopped turn its adapter settled unseen", () =>
         nativeSubagent: projection.subagents.find((item) => item.id === nativeSubagentId)?.status,
         appOwnedSubagent: projection.subagents.find((item) => item.id === appOwnedSubagentId)
           ?.status,
+        nativeSubagentNode: projection.nodes.find((node) => node.id === nativeSubagentId)?.status,
+        appOwnedSubagentNode: projection.nodes.find((node) => node.id === appOwnedSubagentId)
+          ?.status,
         request: projection.runtimeRequests.find((request) => request.id === requestId)?.status,
         interruptResult: projection.turnItems.some(
           (item) => item.runId === runId && item.type === "run_interrupt_result",
@@ -783,6 +810,8 @@ it.effect("ends the run of a stopped turn its adapter settled unseen", () =>
       nativeSubagent: "interrupted",
       // An app-owned subagent runs on its own run and session.
       appOwnedSubagent: "running",
+      nativeSubagentNode: "interrupted",
+      appOwnedSubagentNode: "running",
       request: "cancelled",
       interruptResult: true,
     } as const;

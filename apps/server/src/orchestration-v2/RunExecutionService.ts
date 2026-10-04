@@ -233,9 +233,18 @@ export function openRunOwnedSubagentsFromProjection(input: {
       item.childThreadId === null ? [] : [item.childThreadId],
     ),
   );
+  // An app-owned task's parent-thread node shares its subagent's id.
+  const appOwnedSubagentIds = new Set<NodeId>([
+    ...input.subagents.flatMap((subagent) =>
+      subagent.origin === "app_owned" ? [subagent.id] : [],
+    ),
+    ...input.turnItems.flatMap((item) =>
+      item.type === "subagent" && item.origin === "app_owned" ? [item.subagentId] : [],
+    ),
+  ]);
   const isOwnedNode = (node: OrchestrationV2ExecutionNode) =>
     node.threadId === input.run.threadId
-      ? node.kind === "subagent" && node.runId === input.run.id
+      ? node.kind === "subagent" && node.runId === input.run.id && !appOwnedSubagentIds.has(node.id)
       : linkedChildThreadIds.has(node.threadId);
   return {
     subagents: new Map(
