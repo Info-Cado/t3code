@@ -1,6 +1,7 @@
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   MessageId,
+  type OrchestrationV2ProviderTurn,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
@@ -8,13 +9,18 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as EventSink from "./EventSink.ts";
+import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as RunExecutionService from "./RunExecutionService.ts";
 
 const yieldToRuntime = Effect.yieldNow.pipe(
   Effect.andThen(
@@ -40,21 +46,13 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
 
 const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 
-export interface ProviderTurnInterruptResult {
-  /**
-   * The adapter had already settled the stopped turn and emitted nothing for
-   * it, yet the turn never projected its end: no terminal will end its run.
-   */
-  readonly turnOrphaned: boolean;
-}
-
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
     readonly providerTurnId: ProviderTurnId;
-  }) => Effect.Effect<ProviderTurnInterruptResult, ProviderTurnControlError>;
+  }) => Effect.Effect<void, ProviderTurnControlError>;
   readonly steer: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
@@ -80,11 +78,18 @@ export class ProviderTurnControlServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   ProviderTurnControlServiceV2,
   never,
-  ProjectionStore.ProjectionStoreV2 | ProviderSessionManager.ProviderSessionManagerV2
+  | EventSink.EventSinkV2
+  | IdAllocator.IdAllocatorV2
+  | ProjectionStore.ProjectionStoreV2
+  | ProviderEventIngestor.ProviderEventIngestorV2
+  | ProviderSessionManager.ProviderSessionManagerV2
 > = Layer.effect(
   ProviderTurnControlServiceV2,
   Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
 
     const load = (input: {
@@ -205,6 +210,114 @@ export const layer: Layer.Layer<
         return false;
       });
 
+    /**
+     * Ends a run as its ingestion would on an interrupted terminal, for a
+     * stopped turn its adapter settled without the run seeing it end. Written
+     * only while the run still runs that turn's attempt, so neither this nor
+     * a late terminal can undo the other.
+     */
+    const endOrphanedRun = (input: {
+      readonly threadId: ThreadId;
+      readonly providerSessionId: ProviderSessionId;
+      readonly providerTurn: OrchestrationV2ProviderTurn;
+      readonly attemptId: RunAttemptId;
+    }) =>
+      Effect.gen(function* () {
+        const records = yield* projections.getThreadRecords(
+          input.threadId,
+          ["runs", "attempts", "nodes", "providerThreads", "subagents", "turnItems"],
+          { turnItemTypes: ["subagent"] },
+        );
+        const attempt = records.attempts.find((candidate) => candidate.id === input.attemptId);
+        const run = records.runs.find((candidate) => candidate.id === attempt?.runId);
+        const rootNode = records.nodes.find((candidate) => candidate.id === run?.rootNodeId);
+        const providerThread = records.providerThreads.find(
+          (candidate) => candidate.id === input.providerTurn.providerThreadId,
+        );
+        if (
+          attempt === undefined ||
+          run === undefined ||
+          rootNode === undefined ||
+          providerThread === undefined ||
+          run.status !== "running" ||
+          run.activeAttemptId !== attempt.id
+        ) {
+          return;
+        }
+        const openRunOwnedSubagents = RunExecutionService.openRunOwnedSubagentsFromProjection({
+          run,
+          subagents: records.subagents,
+          turnItems: records.turnItems,
+          nodes: records.nodes,
+          childThreads: [],
+        });
+        const childThreads = yield* Effect.forEach(
+          openRunOwnedSubagents.linkedChildThreadIds,
+          (childThreadId) =>
+            projections
+              .getThreadRecords(childThreadId, ["nodes", "turnItems"], {
+                turnItemStatuses: ["pending", "running", "waiting"],
+              })
+              .pipe(
+                Effect.catchTags({
+                  ProjectionStoreThreadNotFoundError: () =>
+                    Effect.succeed({ nodes: [], turnItems: [] }),
+                }),
+              ),
+        );
+        const completedAt = yield* DateTime.now;
+        // Normalized as ingestion would, which also cancels the turn's
+        // unanswered native user input.
+        const providerTurnEvents = yield* providerEventIngestor.normalize({
+          providerSessionId: input.providerSessionId,
+          providerInstanceId: run.providerInstanceId,
+          threadId: input.threadId,
+          runId: run.id,
+          nodeId: rootNode.id,
+          event: {
+            type: "provider_turn.updated",
+            driver: providerThread.driver,
+            providerTurn: { ...input.providerTurn, status: "interrupted", completedAt },
+          },
+        });
+        const finalization = yield* RunExecutionService.makeFinalRunWrite({
+          idAllocator,
+          run,
+          rootNode,
+          checkpointScopeId: rootNode.checkpointScopeId,
+          providerThread,
+          attempt,
+          openRunOwnedSubagents: RunExecutionService.openRunOwnedSubagentsFromProjection({
+            run,
+            subagents: records.subagents,
+            turnItems: records.turnItems,
+            nodes: records.nodes,
+            childThreads,
+          }),
+          terminal: {
+            type: "turn.terminal",
+            driver: providerThread.driver,
+            providerThreadId: providerThread.id,
+            providerTurnId: input.providerTurn.id,
+            runOrdinal: run.ordinal,
+            status: "interrupted",
+            failure: null,
+            threadDisposition: "reusable",
+          },
+          failureItemPersisted: false,
+          completedAt,
+        });
+        yield* eventSink.writeIfRunCurrent({
+          guardPendingUserInputCancellations: true,
+          threadId: input.threadId,
+          runId: run.id,
+          activeAttemptId: attempt.id,
+          expectedStatus: "running",
+          events: [...providerTurnEvents, ...finalization.events],
+          effects: finalization.effects,
+        });
+      });
+
     return ProviderTurnControlServiceV2.of({
       interrupt: (input) =>
         Effect.gen(function* () {
@@ -212,7 +325,7 @@ export const layer: Layer.Layer<
           const session = Option.isSome(loaded.session)
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session)) return { turnOrphaned: false };
+          if (Option.isNone(session)) return;
           // A settled turn reaches its adapter too: only the adapter knows
           // whether it still runs work for the thread, and each one either
           // stops it or reports there is nothing left to stop. Background work
@@ -230,7 +343,7 @@ export const layer: Layer.Layer<
             loaded.providerTurn.status !== "running" ||
             attemptId === null
           ) {
-            return { turnOrphaned: false };
+            return;
           }
           const terminalized = yield* awaitProjectedTerminal({
             threadId: input.threadId,
@@ -238,7 +351,14 @@ export const layer: Layer.Layer<
             providerTurnId: loaded.providerTurn.id,
             attemptId,
           });
-          return { turnOrphaned: !terminalized };
+          if (!terminalized) {
+            yield* endOrphanedRun({
+              threadId: input.threadId,
+              providerSessionId: input.providerSessionId,
+              providerTurn: loaded.providerTurn,
+              attemptId,
+            });
+          }
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)

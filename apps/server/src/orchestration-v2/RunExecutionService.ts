@@ -219,9 +219,14 @@ export function openRunOwnedSubagentsFromProjection(input: {
     readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
   }>;
 }): OpenRunOwnedSubagentProjection {
-  const runSubagents = input.subagents.filter((subagent) => subagent.runId === input.run.id);
+  // Only provider-native subagents reach a run through its adapter's events.
+  // App-owned ones run on their own runs and sessions.
+  const runSubagents = input.subagents.filter(
+    (subagent) => subagent.runId === input.run.id && subagent.origin === "provider_native",
+  );
   const runSubagentItems = input.turnItems.filter(
-    (item): item is SubagentTurnItem => item.runId === input.run.id && item.type === "subagent",
+    (item): item is SubagentTurnItem =>
+      item.runId === input.run.id && item.type === "subagent" && item.origin === "provider_native",
   );
   const linkedChildThreadIds = new Set(
     [...runSubagents, ...runSubagentItems].flatMap((item) =>
@@ -827,7 +832,9 @@ export const layer: Layer.Layer<
       readonly refreshAfterTurn: Effect.Effect<void>;
       readonly writeIfRunCurrent?: {
         readonly activeAttemptId: RunAttemptId;
-        readonly expectedStatus: OrchestrationV2Run["status"];
+        readonly expectedStatus:
+          | OrchestrationV2Run["status"]
+          | ReadonlyArray<OrchestrationV2Run["status"]>;
       };
     }) =>
       Effect.gen(function* () {
@@ -891,6 +898,7 @@ export const layer: Layer.Layer<
             activeAttemptId: input.writeIfRunCurrent.activeAttemptId,
             expectedStatus: input.writeIfRunCurrent.expectedStatus,
             events: finalization.events,
+            effects: finalization.effects,
           });
           if (!result.committed) {
             return;
@@ -1089,6 +1097,16 @@ export const layer: Layer.Layer<
                 terminal,
                 failureItemPersisted: terminal.status === "failed",
                 refreshAfterTurn,
+                // Checked in the write as well: Stop can end a run whose turn
+                // never projected its end, and a late terminal must not undo it.
+                ...(input.shouldFinalizeRun === undefined
+                  ? {}
+                  : {
+                      writeIfRunCurrent: {
+                        activeAttemptId: input.attempt.id,
+                        expectedStatus: ["starting", "running"] as const,
+                      },
+                    }),
               }).pipe(
                 Effect.mapError(
                   (cause) => new RunExecutionIngestError({ runId: input.run.id, cause }),

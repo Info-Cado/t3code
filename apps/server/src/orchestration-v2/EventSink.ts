@@ -82,14 +82,21 @@ export interface EventSinkV2Shape {
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
+  /**
+   * Atomically commit only while the run's active attempt and status are the
+   * expected ones; effects are enqueued in the same transaction.
+   */
   readonly writeIfRunCurrent: (input: {
     readonly guardPendingUserInputCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly threadId: ThreadId;
     readonly runId: RunId;
     readonly activeAttemptId: RunAttemptId;
-    readonly expectedStatus: OrchestrationV2Run["status"];
+    readonly expectedStatus:
+      | OrchestrationV2Run["status"]
+      | ReadonlyArray<OrchestrationV2Run["status"]>;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+    readonly effects?: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
   }) => Effect.Effect<
     {
       readonly committed: boolean;
@@ -416,9 +423,13 @@ const baseLayer: Layer.Layer<
             LIMIT 1
           `;
             const current = rows[0];
+            const expectedStatuses: ReadonlyArray<string> =
+              typeof input.expectedStatus === "string"
+                ? [input.expectedStatus]
+                : input.expectedStatus;
             if (
               current === undefined ||
-              current.status !== input.expectedStatus ||
+              !expectedStatuses.includes(current.status) ||
               current.active_attempt_id !== input.activeAttemptId
             ) {
               return {
@@ -437,9 +448,19 @@ const baseLayer: Layer.Layer<
               events: normalized,
             });
             yield* applyStoredEvents(storedEvents);
+            yield* effectOutbox.enqueue(input.effects ?? []);
             return { committed: true as const, storedEvents };
           }),
-          (result) => (result.committed ? publishStoredEvents(result.storedEvents) : Effect.void),
+          (result) =>
+            result.committed
+              ? Effect.gen(function* () {
+                  const effectCount = input.effects?.length ?? 0;
+                  if (effectCount > 0) {
+                    yield* effectOutbox.notifyAvailable(effectCount);
+                  }
+                  yield* publishStoredEvents(result.storedEvents);
+                })
+              : Effect.void,
         );
       },
     );

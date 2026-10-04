@@ -378,7 +378,15 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     ),
   );
   const providerTurnControlServiceProvided = ProviderTurnControlService.layer.pipe(
-    Layer.provide(Layer.merge(storesLayer, providerSessionManagerProvided)),
+    Layer.provide(
+      Layer.mergeAll(
+        storesLayer,
+        providerSessionManagerProvided,
+        eventSinkProvided,
+        IdAllocator.layer,
+        providerEventIngestorProvided,
+      ),
+    ),
   );
   const runtimeRequestServiceProvided = RuntimeRequestService.layer.pipe(
     Layer.provide(Layer.merge(storesLayer, providerSessionManagerProvided)),

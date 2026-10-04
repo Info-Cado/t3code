@@ -162,7 +162,15 @@ const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
 );
 
 const providerTurnControlServiceProvided = providerTurnControlServiceLayer.pipe(
-  Layer.provide(Layer.merge(projectionStoreLayer, providerSessionManagerProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      projectionStoreLayer,
+      providerSessionManagerProvided,
+      eventSinkProvided,
+      idAllocatorLayer,
+      providerEventIngestorProvided,
+    ),
+  ),
 );
 const runtimeRequestServiceProvided = runtimeRequestServiceLayer.pipe(
   Layer.provide(Layer.merge(projectionStoreLayer, providerSessionManagerProvided)),

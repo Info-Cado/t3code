@@ -157,39 +157,36 @@ export const executorLayer: Layer.Layer<
                     }),
                 ),
               );
-          case "provider-turn.interrupt": {
-            const request = effect.request;
+          case "provider-turn.interrupt":
             return providerTurnControl
               .interrupt({
                 threadId: effect.threadId,
-                providerSessionId: request.providerSessionId,
-                providerThreadId: request.providerThreadId,
-                providerTurnId: request.providerTurnId,
+                providerSessionId: effect.request.providerSessionId,
+                providerThreadId: effect.request.providerThreadId,
+                providerTurnId: effect.request.providerTurnId,
               })
               .pipe(
                 // The provider has stopped what it still ran and reported it.
                 // Whatever the thread still shows on that provider thread is
                 // work no process will report on, so the Stop ends it too.
-                Effect.flatMap(({ turnOrphaned }) =>
+                Effect.andThen(
                   threads.dispatch({
                     type: "thread.background-work.settle",
                     commandId: CommandId.make(`${effect.commandId}:background-work-settled`),
                     threadId: effect.threadId,
-                    providerThreadId: request.providerThreadId,
-                    providerTurnId: request.providerTurnId,
-                    ...(turnOrphaned ? { providerTurnOrphaned: true } : {}),
+                    providerThreadId: effect.request.providerThreadId,
+                    providerTurnId: effect.request.providerTurnId,
                   }),
                 ),
                 Effect.mapError(
                   (cause) =>
                     new OrchestrationEffectExecutionError({
                       effectId: effect.id,
-                      effectType: request.type,
+                      effectType: effect.request.type,
                       cause,
                     }),
                 ),
               );
-          }
           case "provider-turn.steer":
             return providerTurnControl
               .steer({

@@ -21,7 +21,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as EventSink from "./EventSink.ts";
+import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
@@ -346,7 +349,15 @@ it.effect.each(storageCases)(
       }).pipe(
         Effect.provide(
           Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
-            Layer.provide(sessions),
+            Layer.provide(
+              Layer.mergeAll(
+                sessions,
+                IdAllocator.layer,
+                // No Stop here ends an orphaned run, which is what writes.
+                Layer.mock(EventSink.EventSinkV2)({}),
+                Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({}),
+              ),
+            ),
           ),
         ),
       );

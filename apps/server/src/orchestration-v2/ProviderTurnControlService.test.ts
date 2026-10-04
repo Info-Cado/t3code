@@ -1,6 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CheckpointScopeId,
+  EventId,
+  MessageId,
   type ModelSelection,
+  type OrchestrationV2DomainEvent,
+  RuntimeRequestId,
   NodeId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ThreadProjection,
@@ -23,10 +28,20 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
+import * as EventSink from "./EventSink.ts";
+import * as EventStore from "./EventStore.ts";
+import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
+import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
 const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -195,7 +210,16 @@ function makeControlLayer(input: {
     }),
   );
   return ProviderTurnControlService.layer.pipe(
-    Layer.provide(Layer.merge(projectionLayer, sessionManagerLayer)),
+    Layer.provide(
+      Layer.mergeAll(
+        projectionLayer,
+        sessionManagerLayer,
+        IdAllocator.layer,
+        // These cases never end an orphaned run, which is what writes.
+        Layer.mock(EventSink.EventSinkV2)({}),
+        Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({}),
+      ),
+    ),
   );
 }
 
@@ -337,16 +361,51 @@ it.effect(
     }),
 );
 
-// Stop on a turn its adapter no longer holds: its terminal was emitted when it
-// settled, so it is orphaned only if that end still has not projected (#15197).
-it.effect("reports a stopped turn orphaned only when its adapter settled it unseen", () =>
+function makeRuntime(input: {
+  readonly now: DateTime.Utc;
+  readonly providerSessionId: ProviderSessionId;
+  readonly interruptTurn: ProviderAdapterV2SessionRuntime["interruptTurn"];
+}): ProviderAdapterV2SessionRuntime {
+  return {
+    instanceId: providerInstanceId,
+    driver,
+    providerSessionId: input.providerSessionId,
+    providerSession: {
+      id: input.providerSessionId,
+      driver,
+      providerInstanceId,
+      status: "running",
+      cwd: "/workspace",
+      model: modelSelection.model,
+      capabilities: CodexProviderCapabilitiesV2,
+      createdAt: input.now,
+      updatedAt: input.now,
+      lastError: null,
+    },
+    events: Stream.empty,
+    ensureThread: () => Effect.die("unused ensureThread"),
+    resumeThread: () => Effect.die("unused resumeThread"),
+    startTurn: () => Effect.die("unused startTurn"),
+    steerTurn: () => Effect.die("unused steerTurn"),
+    interruptTurn: input.interruptTurn,
+    respondToRuntimeRequest: () => Effect.die("unused respondToRuntimeRequest"),
+    readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
+    rollbackThread: () => Effect.die("unused rollbackThread"),
+    forkThread: () => Effect.die("unused forkThread"),
+  };
+}
+
+// Stop on a turn its adapter reports no longer active waits for that turn's
+// end to project, since its terminal went out when it settled. It does not
+// wait on an adapter that reports nothing.
+it.effect("waits for a settled turn's end only when its adapter no longer holds it", () =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
-    const threadId = ThreadId.make("thread:orphaned-stop");
-    const providerSessionId = ProviderSessionId.make("provider-session:orphaned-stop");
-    const providerThreadId = ProviderThreadId.make("provider-thread:orphaned-stop");
-    const providerTurnId = ProviderTurnId.make("provider-turn:orphaned-stop");
-    const attemptId = RunAttemptId.make("run-attempt:orphaned-stop");
+    const threadId = ThreadId.make("thread:settled-stop");
+    const providerSessionId = ProviderSessionId.make("provider-session:settled-stop");
+    const providerThreadId = ProviderThreadId.make("provider-thread:settled-stop");
+    const providerTurnId = ProviderTurnId.make("provider-turn:settled-stop");
+    const attemptId = RunAttemptId.make("run-attempt:settled-stop");
     const providerThread: OrchestrationV2ProviderThread = {
       id: providerThreadId,
       driver,
@@ -364,60 +423,25 @@ it.effect("reports a stopped turn orphaned only when its adapter settled it unse
       createdAt: now,
       updatedAt: now,
     };
-    const runningProjection: OrchestrationV2ThreadProjection = (() => {
-      const projection = makeProjection({
-        now,
-        threadId,
-        providerThread,
-        providerTurnId,
-        attemptId,
-      });
-      return {
-        ...projection,
-        attempts: projection.attempts.map(
-          (attempt): OrchestrationV2ThreadProjection["attempts"][number] => ({
-            ...attempt,
-            status: "running",
-            completedAt: null,
-          }),
-        ),
-      };
-    })();
-    const interruptStop = (scenario: {
+    const base = makeProjection({ now, threadId, providerThread, providerTurnId, attemptId });
+    const runningProjection: OrchestrationV2ThreadProjection = {
+      ...base,
+      attempts: base.attempts.map(
+        (attempt): OrchestrationV2ThreadProjection["attempts"][number] => ({
+          ...attempt,
+          status: "running",
+          completedAt: null,
+        }),
+      ),
+    };
+    const stop = (scenario: {
       readonly outcome: "turn_not_active" | undefined;
-      /** The control-context read on which the turn's terminal lands. */
-      readonly terminalOnRead?: number;
+      /** The control-context read on which the turn's end lands. */
+      readonly terminalOnRead: number;
     }) =>
       Effect.gen(function* () {
         const projection = yield* Ref.make(runningProjection);
         const reads = yield* Ref.make(0);
-        const runtime: ProviderAdapterV2SessionRuntime = {
-          instanceId: providerInstanceId,
-          driver,
-          providerSessionId,
-          providerSession: {
-            id: providerSessionId,
-            driver,
-            providerInstanceId,
-            status: "running",
-            cwd: "/workspace",
-            model: modelSelection.model,
-            capabilities: CodexProviderCapabilitiesV2,
-            createdAt: now,
-            updatedAt: now,
-            lastError: null,
-          },
-          events: Stream.empty,
-          ensureThread: () => Effect.die("unused ensureThread"),
-          resumeThread: () => Effect.die("unused resumeThread"),
-          startTurn: () => Effect.die("unused startTurn"),
-          steerTurn: () => Effect.die("unused steerTurn"),
-          interruptTurn: () => Effect.succeed(scenario.outcome),
-          respondToRuntimeRequest: () => Effect.die("unused respondToRuntimeRequest"),
-          readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
-          rollbackThread: () => Effect.die("unused rollbackThread"),
-          forkThread: () => Effect.die("unused forkThread"),
-        };
         const beforeControlRead = Ref.updateAndGet(reads, (count) => count + 1).pipe(
           Effect.flatMap((count) =>
             count === scenario.terminalOnRead
@@ -437,9 +461,14 @@ it.effect("reports a stopped turn orphaned only when its adapter settled it unse
               : Effect.void,
           ),
         );
-        const result = yield* Effect.gen(function* () {
+        const runtime = makeRuntime({
+          now,
+          providerSessionId,
+          interruptTurn: () => Effect.succeed(scenario.outcome),
+        });
+        yield* Effect.gen(function* () {
           const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
-          return yield* control.interrupt({
+          yield* control.interrupt({
             threadId,
             providerSessionId,
             providerThreadId,
@@ -450,22 +479,341 @@ it.effect("reports a stopped turn orphaned only when its adapter settled it unse
             makeControlLayer({ projection, runtime, providerSessionId, beforeControlRead }),
           ),
         );
-        return { turnOrphaned: result.turnOrphaned, reads: yield* Ref.get(reads) };
+        return yield* Ref.get(reads);
       });
 
-    // The adapter settled the turn, and its end never projects.
-    const orphaned = yield* interruptStop({ outcome: "turn_not_active" });
-    assert.isTrue(orphaned.turnOrphaned);
-    // The adapter settled the turn and its end projects while Stop waits.
-    assert.deepEqual(yield* interruptStop({ outcome: "turn_not_active", terminalOnRead: 3 }), {
-      turnOrphaned: false,
-      reads: 3,
-    });
-    // An adapter that stopped a live turn (or cannot tell) reports nothing, and
-    // Stop does not wait on its terminal.
-    assert.deepEqual(yield* interruptStop({ outcome: undefined }), {
-      turnOrphaned: false,
-      reads: 1,
-    });
+    // The turn's end lands on the third read, and Stop stops waiting there.
+    assert.equal(yield* stop({ outcome: "turn_not_active", terminalOnRead: 3 }), 3);
+    // An adapter that stopped a live turn (or cannot tell) is not waited on.
+    assert.equal(yield* stop({ outcome: undefined, terminalOnRead: 3 }), 1);
   }),
+);
+
+const persistenceLayer = (() => {
+  const database = SqlitePersistenceMemory;
+  const stores = Layer.mergeAll(
+    EventStore.layer,
+    ProjectionStore.layer,
+    ProjectStore.layer,
+    CommandReceiptStore.layer,
+    EffectOutbox.layer,
+    TurnItemPositionStore.layer,
+  ).pipe(Layer.provide(database));
+  const eventSink = EventSink.layerFromStores.pipe(Layer.provide(Layer.mergeAll(stores, database)));
+  const ingestor = ProviderEventIngestor.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(stores, eventSink, IdAllocator.layer, ThreadCommandExecutor.layer),
+    ),
+  );
+  return Layer.mergeAll(database, stores, eventSink, ingestor, IdAllocator.layer);
+})();
+
+// Stop on a turn its adapter settled without the run ever seeing it end
+// (#15197): no terminal will come, so Stop ends the run as its ingestion
+// would have, and a terminal that turns up late cannot undo that.
+it.effect("ends the run of a stopped turn its adapter settled unseen", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const threadId = ThreadId.make("thread:orphaned-stop");
+    const providerSessionId = ProviderSessionId.make("provider-session:orphaned-stop");
+    const providerThreadId = ProviderThreadId.make("provider-thread:orphaned-stop");
+    const providerTurnId = ProviderTurnId.make("provider-turn:orphaned-stop");
+    const attemptId = RunAttemptId.make("run-attempt:orphaned-stop");
+    const runId = RunId.make("run:orphaned-stop");
+    const rootNodeId = NodeId.make("node:orphaned-stop");
+    const requestNodeId = NodeId.make("node:orphaned-stop:request");
+    const requestId = RuntimeRequestId.make("request:orphaned-stop");
+    const nativeSubagentId = NodeId.make("subagent:orphaned-stop:native");
+    const appOwnedSubagentId = NodeId.make("subagent:orphaned-stop:app-owned");
+    const common = { threadId, occurredAt: now };
+    const subagent = (id: NodeId, origin: "provider_native" | "app_owned") =>
+      ({
+        ...common,
+        id: EventId.make(`event:${id}`),
+        type: "subagent.updated",
+        runId,
+        nodeId: id,
+        driver,
+        providerInstanceId,
+        payload: {
+          id,
+          threadId,
+          runId,
+          parentNodeId: rootNodeId,
+          origin,
+          createdBy: "agent",
+          driver,
+          providerInstanceId,
+          providerThreadId: origin === "provider_native" ? providerThreadId : null,
+          childThreadId: null,
+          nativeTaskRef: null,
+          prompt: "Explore the codebase.",
+          title: null,
+          model: null,
+          status: "running",
+          result: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+        },
+      }) satisfies OrchestrationV2DomainEvent;
+    const seed: ReadonlyArray<OrchestrationV2DomainEvent> = [
+      {
+        ...common,
+        id: EventId.make("event:orphaned-stop:thread"),
+        type: "thread.created",
+        payload: {
+          id: threadId,
+          projectId: ProjectId.make("project:orphaned-stop"),
+          title: "Orphaned stop",
+          providerInstanceId,
+          modelSelection,
+          createdBy: "user",
+          creationSource: "web",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: "/workspace",
+          activeProviderThreadId: providerThreadId,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      },
+      {
+        ...common,
+        id: EventId.make("event:orphaned-stop:provider-thread"),
+        type: "provider-thread.updated",
+        payload: {
+          id: providerThreadId,
+          driver,
+          providerInstanceId,
+          providerSessionId,
+          appThreadId: threadId,
+          ownerNodeId: null,
+          nativeThreadRef: { driver, nativeId: "native-thread:orphaned-stop", strength: "strong" },
+          nativeConversationHeadRef: null,
+          status: "active",
+          firstRunOrdinal: 1,
+          lastRunOrdinal: 1,
+          handoffIds: [],
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      {
+        ...common,
+        id: EventId.make("event:orphaned-stop:run"),
+        type: "run.created",
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId,
+          userMessageId: MessageId.make("message:orphaned-stop"),
+          rootNodeId,
+          activeAttemptId: attemptId,
+          status: "running",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      },
+      {
+        ...common,
+        id: EventId.make("event:orphaned-stop:root-node"),
+        type: "node.updated",
+        runId,
+        nodeId: rootNodeId,
+        payload: {
+          id: rootNodeId,
+          threadId,
+          runId,
+          parentNodeId: null,
+          rootNodeId,
+          kind: "root_turn",
+          status: "running",
+          countsForRun: true,
+          providerThreadId,
+          providerTurnId,
+          nativeItemRef: null,
+          runtimeRequestId: null,
+          checkpointScopeId: CheckpointScopeId.make("checkpoint-scope:orphaned-stop"),
+          startedAt: now,
+          completedAt: null,
+        },
+      },
+      {
+        ...common,
+        id: EventId.make("event:orphaned-stop:attempt"),
+        type: "run-attempt.created",
+        payload: {
+          id: attemptId,
+          runId,
+          attemptOrdinal: 1,
+          rootNodeId,
+          providerInstanceId,
+          providerThreadId,
+          providerTurnId,
+          reason: "initial",
+          status: "running",
+          startedAt: now,
+          completedAt: null,
+        },
+      },
+      {
+        ...common,
+        id: EventId.make("event:orphaned-stop:turn"),
+        type: "provider-turn.updated",
+        nodeId: rootNodeId,
+        payload: {
+          id: providerTurnId,
+          providerThreadId,
+          nodeId: rootNodeId,
+          runAttemptId: attemptId,
+          nativeTurnRef: { driver, nativeId: "native-turn:orphaned-stop", strength: "strong" },
+          ordinal: 1,
+          status: "running",
+          startedAt: now,
+          completedAt: null,
+        },
+      },
+      subagent(nativeSubagentId, "provider_native"),
+      subagent(appOwnedSubagentId, "app_owned"),
+      {
+        ...common,
+        id: EventId.make("event:orphaned-stop:request-node"),
+        type: "node.updated",
+        runId,
+        nodeId: requestNodeId,
+        payload: {
+          id: requestNodeId,
+          threadId,
+          runId,
+          parentNodeId: rootNodeId,
+          rootNodeId,
+          kind: "user_input_request",
+          status: "waiting",
+          countsForRun: false,
+          providerThreadId,
+          providerTurnId,
+          nativeItemRef: null,
+          runtimeRequestId: requestId,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: null,
+        },
+      },
+      {
+        ...common,
+        id: EventId.make("event:orphaned-stop:request"),
+        type: "runtime-request.updated",
+        nodeId: requestNodeId,
+        payload: {
+          id: requestId,
+          nodeId: requestNodeId,
+          providerTurnId,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "live", providerSessionId },
+          createdAt: now,
+          resolvedAt: null,
+        },
+      },
+    ];
+    yield* Effect.forEach(seed, (event) => projections.apply(event), { discard: true });
+
+    const runtime = makeRuntime({
+      now,
+      providerSessionId,
+      interruptTurn: () => Effect.succeed("turn_not_active" as const),
+    });
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      yield* control.interrupt({ threadId, providerSessionId, providerThreadId, providerTurnId });
+    }).pipe(
+      Effect.provide(
+        ProviderTurnControlService.layer.pipe(
+          Layer.provide(
+            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+              get: (id) =>
+                Effect.succeed(id === providerSessionId ? Option.some(runtime) : Option.none()),
+            }),
+          ),
+        ),
+      ),
+    );
+
+    const statuses = Effect.gen(function* () {
+      const projection = yield* projections.getThreadProjection(threadId);
+      return {
+        run: projection.runs.find((run) => run.id === runId)?.status,
+        attempt: projection.attempts.find((attempt) => attempt.id === attemptId)?.status,
+        providerTurn: projection.providerTurns.find((turn) => turn.id === providerTurnId)?.status,
+        rootNode: projection.nodes.find((node) => node.id === rootNodeId)?.status,
+        nativeSubagent: projection.subagents.find((item) => item.id === nativeSubagentId)?.status,
+        appOwnedSubagent: projection.subagents.find((item) => item.id === appOwnedSubagentId)
+          ?.status,
+        request: projection.runtimeRequests.find((request) => request.id === requestId)?.status,
+        interruptResult: projection.turnItems.some(
+          (item) => item.runId === runId && item.type === "run_interrupt_result",
+        ),
+      };
+    });
+    const ended = {
+      run: "interrupted",
+      attempt: "interrupted",
+      providerTurn: "interrupted",
+      rootNode: "interrupted",
+      nativeSubagent: "interrupted",
+      // An app-owned subagent runs on its own run and session.
+      appOwnedSubagent: "running",
+      request: "cancelled",
+      interruptResult: true,
+    } as const;
+    assert.deepEqual(yield* statuses, ended);
+    assert.isTrue(
+      Option.isSome(yield* outbox.get(`effect:checkpoint.capture:${runId}`)),
+      "the stopped run captures its checkpoint",
+    );
+
+    // A terminal that turns up after Stop ended the run is written only while
+    // the run still runs that attempt, as run execution now writes it.
+    const late = yield* eventSink.writeIfRunCurrent({
+      threadId,
+      runId,
+      activeAttemptId: attemptId,
+      expectedStatus: ["starting", "running"],
+      events: [
+        {
+          ...common,
+          id: EventId.make("event:orphaned-stop:late-run"),
+          type: "run.updated",
+          runId,
+          payload: {
+            ...(yield* projections.getThreadProjection(threadId)).runs[0]!,
+            status: "waiting",
+            completedAt: null,
+          },
+        },
+      ],
+    });
+    assert.isFalse(late.committed);
+    assert.deepEqual(yield* statuses, ended);
+  }).pipe(Effect.provide(persistenceLayer)),
 );
