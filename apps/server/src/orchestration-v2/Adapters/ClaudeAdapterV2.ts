@@ -7243,14 +7243,15 @@ export function makeClaudeAdapterV2(
               // Stop after the turn settled. With no CLI process of this
               // native thread left, nothing it started is still running: its
               // roster is not authoritative any more, and the orchestrator
-              // settles the items the thread still shows.
-              if (nativeThreadId === null) return;
+              // settles the items the thread still shows. No terminal follows:
+              // the turn's was emitted when it settled.
+              if (nativeThreadId === null) return "turn_not_active" as const;
               if (existing === null || existing.nativeThreadId !== nativeThreadId) {
                 yield* clearWakeStateForNativeThread(nativeThreadId);
                 yield* resetBackgroundTaskStateForNativeThreadProcess(nativeThreadId, {
                   status: "idle",
                 });
-                return;
+                return "turn_not_active" as const;
               }
               // The background shells belong to the CLI process, so closing
               // its query is what stops them.
@@ -7264,7 +7265,7 @@ export function makeClaudeAdapterV2(
                   status: "idle",
                 });
               }
-              return;
+              return "turn_not_active" as const;
             }
             if (existing === null) {
               return yield* new ProviderAdapter.ProviderAdapterProtocolError({

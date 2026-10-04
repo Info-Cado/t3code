@@ -40,13 +40,21 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
 
 const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 
+export interface ProviderTurnInterruptResult {
+  /**
+   * The adapter had already settled the stopped turn and emitted nothing for
+   * it, yet the turn never projected its end: no terminal will end its run.
+   */
+  readonly turnOrphaned: boolean;
+}
+
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
     readonly providerTurnId: ProviderTurnId;
-  }) => Effect.Effect<void, ProviderTurnControlError>;
+  }) => Effect.Effect<ProviderTurnInterruptResult, ProviderTurnControlError>;
   readonly steer: (input: {
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
@@ -168,8 +176,8 @@ export const layer: Layer.Layer<
         return { context, providerThread: interruptProviderThread, providerTurn, session };
       });
 
-    // Adapters emit an interrupted turn's terminal before interruptTurn
-    // returns, but it is projected on the run's detached ingestion fiber.
+    // Whether an emitted terminal projects for the turn and its attempt.
+    // Provider terminal events are projected on a detached ingestion fiber.
     // Yield through the Node event loop instead of sleeping on Effect's clock
     // so deterministic runtimes cannot deadlock a command waiting on it.
     const awaitProjectedTerminal = (input: {
@@ -204,28 +212,33 @@ export const layer: Layer.Layer<
           const session = Option.isSome(loaded.session)
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
-          if (Option.isNone(session)) return;
+          if (Option.isNone(session)) return { turnOrphaned: false };
           // A settled turn reaches its adapter too: only the adapter knows
           // whether it still runs work for the thread, and each one either
           // stops it or reports there is nothing left to stop. Background work
           // the projection still shows is settled by the orchestrator after.
-          yield* session.value.interruptTurn({
+          const outcome = yield* session.value.interruptTurn({
             providerThread: loaded.providerThread,
             providerTurnId: loaded.providerTurn.id,
             requestRuntimeRestart: true,
           });
-          // An adapter that already settled this turn reports nothing, yet the
-          // run may never have seen the turn end. Waiting here lets the settle
-          // follow-up tell that run apart from one still projecting its end.
+          // A turn the adapter no longer holds may still look running: its
+          // terminal can be on its way to the projection, or lost (#15197).
           const attemptId = loaded.providerTurn.runAttemptId;
-          if (loaded.providerTurn.status === "running" && attemptId !== null) {
-            yield* awaitProjectedTerminal({
-              threadId: input.threadId,
-              providerThreadId: input.providerThreadId,
-              providerTurnId: loaded.providerTurn.id,
-              attemptId,
-            });
+          if (
+            outcome !== "turn_not_active" ||
+            loaded.providerTurn.status !== "running" ||
+            attemptId === null
+          ) {
+            return { turnOrphaned: false };
           }
+          const terminalized = yield* awaitProjectedTerminal({
+            threadId: input.threadId,
+            providerThreadId: input.providerThreadId,
+            providerTurnId: loaded.providerTurn.id,
+            attemptId,
+          });
+          return { turnOrphaned: !terminalized };
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)

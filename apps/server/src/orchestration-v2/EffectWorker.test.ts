@@ -85,7 +85,7 @@ function makeExecutorLayer(input: {
     Layer.succeed(
       ProviderTurnControlService.ProviderTurnControlServiceV2,
       ProviderTurnControlService.ProviderTurnControlServiceV2.of({
-        interrupt: () => Effect.void,
+        interrupt: () => Effect.succeed({ turnOrphaned: false }),
         steer: () => Effect.void,
         interruptAndAwaitTerminal: (request) =>
           record(

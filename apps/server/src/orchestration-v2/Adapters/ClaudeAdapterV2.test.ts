@@ -3542,12 +3542,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
         // The Waiting strip's Stop reaches the adapter as an interrupt of the
         // settled turn with requestRuntimeRestart.
-        yield* harness.runtime.interruptTurn({
+        const outcome = yield* harness.runtime.interruptTurn({
           providerThread: settledThread ?? harness.providerThread,
           providerTurnId: harness.terminalEvents()[0]!.providerTurnId,
           requestRuntimeRestart: true,
         });
 
+        // The turn's terminal went out when it settled; Stop emits no other.
+        assert.equal(outcome, "turn_not_active");
+        assert.lengthOf(harness.terminalEvents(), 1);
         assert.equal(closes, 1, "Stop must close the CLI process that owns the task");
         yield* awaitUntil(
           () =>
@@ -3589,11 +3592,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         let quietYields = 0;
         yield* awaitUntil(() => quietYields++ >= 50, "query exit");
 
-        yield* harness.runtime.interruptTurn({
+        const outcome = yield* harness.runtime.interruptTurn({
           providerThread: settledThread ?? harness.providerThread,
           providerTurnId: harness.terminalEvents()[0]!.providerTurnId,
           requestRuntimeRestart: true,
         });
+        assert.equal(outcome, "turn_not_active");
         yield* awaitUntil(
           () =>
             (providerThreadRosterEvents(harness.events).at(-1)?.providerThread

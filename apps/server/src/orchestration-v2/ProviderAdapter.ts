@@ -423,6 +423,14 @@ export interface ProviderAdapterV2InterruptInput {
   readonly requestRuntimeRestart?: boolean;
 }
 
+/**
+ * What an interrupt found, for adapters that can tell. `turn_not_active`: the
+ * adapter held no live turn with this id and emitted nothing for it, so any
+ * terminal it will ever emit for that turn was emitted before the interrupt.
+ * Adapters that cannot tell return nothing.
+ */
+export type ProviderAdapterV2InterruptOutcome = "turn_not_active";
+
 export interface ProviderAdapterV2RuntimeRequestResponseInput {
   readonly requestId: RuntimeRequestId;
   readonly decision?: ProviderApprovalDecision;
@@ -547,7 +555,7 @@ export interface ProviderAdapterV2SessionRuntime {
   ) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly interruptTurn: (
     input: ProviderAdapterV2InterruptInput,
-  ) => Effect.Effect<void, ProviderAdapterV2Error>;
+  ) => Effect.Effect<ProviderAdapterV2InterruptOutcome | void, ProviderAdapterV2Error>;
   /**
    * Lets a runtime shared by several app threads unload one provider thread's
    * native state (and its MCP servers) when that app thread detaches, while

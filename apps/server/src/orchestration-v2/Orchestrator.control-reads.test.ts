@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  CheckpointScopeId,
   CommandId,
   MessageId,
   EventId,
@@ -535,21 +536,26 @@ it.effect("settles only the stopped run's background work, once", () =>
   }).pipe(Effect.provide(testLayer)),
 );
 
-// Stop on a turn its adapter had already settled: the adapter reports nothing
-// and the run never projected the turn's end (#15197). The settle follow-up
-// ends that run, but not one whose live attempt superseded the stopped turn.
+// Stop on a turn its adapter had already settled without the run seeing it end
+// (#15197). The settle follow-up ends that run as its ingestion would have, but
+// only on the interrupt's word, and not a run whose newer attempt superseded it.
 it.effect("ends a stopped run whose settled turn never projected its end", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
     const now = yield* DateTime.now;
-    const seedRunningRun = (name: string, options: { readonly steered: boolean }) =>
+    const stopRunningRun = (
+      name: string,
+      options: { readonly steered: boolean; readonly orphaned: boolean },
+    ) =>
       Effect.gen(function* () {
         const threadId = ThreadId.make(`thread:${name}`);
         const providerThreadId = ProviderThreadId.make(`provider-thread:${name}`);
         const runId = RunId.make(`run:${name}`);
         const attemptId = RunAttemptId.make(`attempt:${name}`);
         const nodeId = NodeId.make(`node:${name}`);
+        const subagentId = NodeId.make(`subagent:${name}`);
         const providerTurnId = ProviderTurnId.make(`provider-turn:${name}`);
         yield* orchestrator.dispatch({
           type: "thread.create",
@@ -633,7 +639,7 @@ it.effect("ends a stopped run whose settled turn never projected its end", () =>
             providerTurnId,
             nativeItemRef: null,
             runtimeRequestId: null,
-            checkpointScopeId: null,
+            checkpointScopeId: CheckpointScopeId.make(`checkpoint-scope:${name}`),
             startedAt: now,
             completedAt: null,
           },
@@ -674,43 +680,93 @@ it.effect("ends a stopped run whose settled turn never projected its end", () =>
             completedAt: null,
           },
         });
+        yield* projections.apply({
+          id: EventId.make(`${name}:subagent`),
+          type: "subagent.updated",
+          threadId,
+          runId,
+          nodeId: subagentId,
+          driver: adapter.driver,
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: {
+            id: subagentId,
+            threadId,
+            runId,
+            parentNodeId: nodeId,
+            origin: "provider_native",
+            createdBy: "agent",
+            driver: adapter.driver,
+            providerInstanceId: instanceId,
+            providerThreadId,
+            childThreadId: null,
+            nativeTaskRef: null,
+            prompt: "Explore the codebase.",
+            title: null,
+            model: null,
+            status: "running",
+            result: null,
+            startedAt: now,
+            completedAt: null,
+            updatedAt: now,
+          },
+        });
         yield* orchestrator.dispatch({
           type: "thread.background-work.settle",
           commandId: CommandId.make(`stop-${name}:background-work-settled`),
           threadId,
           providerThreadId,
           providerTurnId,
+          ...(options.orphaned ? { providerTurnOrphaned: true } : {}),
         });
         const projection = yield* projections.getThreadProjection(threadId);
+        const captures = yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count FROM orchestration_v2_effect_outbox
+          WHERE thread_id = ${threadId} AND effect_type = 'checkpoint.capture'`;
         return {
           run: projection.runs.find((run) => run.id === runId)?.status,
           attempt: projection.attempts.find((attempt) => attempt.id === attemptId)?.status,
           providerTurn: projection.providerTurns.find((turn) => turn.id === providerTurnId)?.status,
           rootNode: projection.nodes.find((node) => node.id === nodeId)?.status,
+          subagent: projection.subagents.find((subagent) => subagent.id === subagentId)?.status,
           providerThread: projection.providerThreads.find(
             (thread) => thread.id === providerThreadId,
           )?.status,
           interruptResult: projection.turnItems.some(
             (item) => item.runId === runId && item.type === "run_interrupt_result",
           ),
+          checkpointCaptures: captures[0]?.count,
         };
       });
-
-    assert.deepEqual(yield* seedRunningRun("orphaned-stop", { steered: false }), {
-      run: "interrupted",
-      attempt: "interrupted",
-      providerTurn: "interrupted",
-      rootNode: "interrupted",
-      providerThread: "idle",
-      interruptResult: true,
-    });
-    assert.deepEqual(yield* seedRunningRun("steered-stop", { steered: true }), {
+    const untouched = {
       run: "running",
       attempt: "running",
       providerTurn: "running",
       rootNode: "running",
+      subagent: "running",
       providerThread: "active",
       interruptResult: false,
+      checkpointCaptures: 0,
+    } as const;
+
+    assert.deepEqual(yield* stopRunningRun("orphaned-stop", { steered: false, orphaned: true }), {
+      run: "interrupted",
+      attempt: "interrupted",
+      providerTurn: "interrupted",
+      rootNode: "interrupted",
+      subagent: "interrupted",
+      providerThread: "idle",
+      interruptResult: true,
+      checkpointCaptures: 1,
     });
+    // Without the interrupt's word the turn's end may still be on its way.
+    assert.deepEqual(
+      yield* stopRunningRun("unreported-stop", { steered: false, orphaned: false }),
+      untouched,
+    );
+    assert.deepEqual(
+      yield* stopRunningRun("steered-stop", { steered: true, orphaned: true }),
+      untouched,
+    );
   }).pipe(Effect.provide(testLayer)),
 );

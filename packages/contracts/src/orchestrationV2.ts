@@ -2913,6 +2913,11 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
+    /**
+     * Its adapter had already settled the stopped turn, which never projected
+     * its end. The stopped run is ended as interrupted if it still runs it.
+     */
+    providerTurnOrphaned: Schema.optional(Schema.Boolean),
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
