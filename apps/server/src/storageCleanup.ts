@@ -183,7 +183,7 @@ export function storageCleanupPullRequestMerged(
 }
 
 /** A subagent's turn in the shared checkout is activity for its owner too. */
-function storageCleanupWorktreeActivityAt(
+export function storageCleanupWorktreeActivityAt(
   sharers: ReadonlyArray<OrchestrationV2ThreadShell>,
 ): number {
   return Math.max(...sharers.map(storageCleanupActivityAt));

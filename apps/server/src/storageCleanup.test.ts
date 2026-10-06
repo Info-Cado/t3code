@@ -12,6 +12,7 @@ import {
   storageCleanupActivityAt,
   storageCleanupPullRequestMerged,
   storageCleanupThreadIdle,
+  storageCleanupWorktreeActivityAt,
   storageCleanupWorktreeOwner,
 } from "./storageCleanup.ts";
 
@@ -252,6 +253,24 @@ describe("V2 storage cleanup worktree owner", () => {
 
   it("retains a delegated subagent that could not recreate the checkout", () => {
     expect(ownerOf([owner, subagent("delegated", "mcp", { branch: null })])).toBeNull();
+    expect(ownerOf([owner, subagent("delegated", "mcp", { branch: "other" })])).toBeNull();
+  });
+
+  it("retains a subagent whose parent is unknown", () => {
+    const orphan = subagent("orphan", "provider", {
+      lineage: {
+        rootThreadId: owner.id,
+        parentThreadId: ThreadId.make("missing"),
+        relationshipToParent: "subagent",
+      },
+    });
+    expect(ownerOf([owner, orphan])).toBeNull();
+  });
+
+  it("measures inactivity from the latest subagent activity", () => {
+    const recent = at(-DAY_MS);
+    const native = subagent("native", "provider", { latestRunCompletedAt: recent });
+    expect(storageCleanupWorktreeActivityAt([owner, native])).toBe(DateTime.toEpochMillis(recent));
   });
 
   it("retains a checkout shared with another thread or its subagents", () => {
