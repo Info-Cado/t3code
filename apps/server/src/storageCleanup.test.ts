@@ -242,6 +242,9 @@ describe("V2 storage cleanup worktree owner", () => {
       },
     });
     expect(ownerOf([owner, native, nested, subagent("delegated", "mcp")])).toBe(owner.id);
+    expect(ownerOf([owner, subagent("finished", "provider", { status: "completed" })])).toBe(
+      owner.id,
+    );
   });
 
   it("retains the checkout while a subagent is busy", () => {
