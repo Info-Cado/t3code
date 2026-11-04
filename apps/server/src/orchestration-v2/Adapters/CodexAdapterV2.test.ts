@@ -1588,6 +1588,41 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  it("opens T3's tools to an orchestrator and closes native subagents to it", () => {
+    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      cwd: "/workspace",
+      sandboxPolicy: { type: "readOnly", access: { type: "fullAccess" } },
+      orchestrator: true,
+    });
+    const mcpSession = {
+      environmentId: EnvironmentId.make("environment-codex-orchestrator"),
+      threadId: ThreadId.make("thread-codex-orchestrator"),
+      providerSessionId: "provider-session-codex-orchestrator",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer secret-codex-token",
+      browserToolsAvailable: true,
+    };
+    const params = CodexAdapterV2.codexThreadRuntimeParams({
+      threadId: mcpSession.threadId,
+      mcpSession,
+      runtimePolicy,
+    });
+
+    assert.isFalse(params.config["features.multi_agent"]);
+    assert.deepInclude(params.config["mcp_servers.t3-code"], {
+      default_tools_approval_mode: "approve",
+    });
+    const ordinary = CodexAdapterV2.codexThreadRuntimeParams({
+      threadId: mcpSession.threadId,
+      mcpSession,
+    });
+    assert.notProperty(ordinary.config, "features.multi_agent");
+    assert.notProperty(ordinary.config["mcp_servers.t3-code"], "default_tools_approval_mode");
+  });
+
   it.effect("adds the session MCP server without replacing launch-argument servers", () =>
     Effect.gen(function* () {
       const scenario = "launch-mcp-servers";

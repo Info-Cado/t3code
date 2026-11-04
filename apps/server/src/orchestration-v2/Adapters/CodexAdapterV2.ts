@@ -1379,7 +1379,7 @@ const CODEX_T3_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 const CODEX_T3_DIRECT_MCP_SERVER = "t3-code-direct";
 const CODEX_DIRECT_ONLY_T3_TOOL = "t3_thread_wait";
 
-function codexThreadRuntimeParams(input: {
+export function codexThreadRuntimeParams(input: {
   readonly threadId: ThreadId | null;
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
@@ -1390,6 +1390,7 @@ function codexThreadRuntimeParams(input: {
   readonly config: Readonly<Record<string, Schema.Json>>;
 } {
   const { mcpSession } = input;
+  const orchestrator = input.runtimePolicy?.orchestrator === true;
   const t3Server =
     mcpSession === undefined
       ? undefined
@@ -1397,12 +1398,16 @@ function codexThreadRuntimeParams(input: {
           url: mcpSession.endpoint,
           tool_timeout_sec: CODEX_T3_MCP_TOOL_TIMEOUT_SEC,
           http_headers: { Authorization: mcpSession.authorizationHeader },
+          // Its read-only sandbox would otherwise ask before every T3 tool that changes state.
+          ...(orchestrator ? { default_tools_approval_mode: "approve" } : {}),
         };
   return {
     ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      // The user cannot message native subagents, so an orchestrator works through T3's.
+      ...(orchestrator ? { "features.multi_agent": false } : {}),
       // One app-server serves many threads, so the id goes in per-thread shell config, not its env.
       ...(input.threadId === null
         ? {}
