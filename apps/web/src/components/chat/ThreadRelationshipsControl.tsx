@@ -387,6 +387,7 @@ export function ThreadRelationshipsPanel(props: {
   readonly agentsPanel?: {
     readonly activeThreadId: ThreadId | null;
     readonly onOpenThread?: () => void;
+    readonly actions?: ReactNode;
   };
 }) {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
@@ -906,6 +907,7 @@ export function ThreadRelationshipsPanel(props: {
           title={`${props.agentsPanel ? "Agents" : "Lineage"}${runningCount > 0 ? ` · ${runningCount} running` : ""}`}
           // A lone "Previous agents" row names itself; the heading returns for status or actions.
           showHeading={
+            !!props.agentsPanel ||
             runningCount > 0 ||
             canDetach ||
             related.length > 0 ||
@@ -914,7 +916,9 @@ export function ThreadRelationshipsPanel(props: {
           }
           data-thread-relationships-panel
           actions={
-            canDetach && !props.agentsPanel ? (
+            props.agentsPanel ? (
+              props.agentsPanel.actions
+            ) : canDetach ? (
               <Menu>
                 <MenuTrigger
                   render={

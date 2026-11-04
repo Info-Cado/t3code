@@ -177,28 +177,26 @@ function ProjectAgents(props: {
         ) : null}
       </div>
       {orchestrator ? (
-        <div className="relative">
-          {agentsWork ? (
-            <button
-              type="button"
-              onClick={() => void stopAll()}
-              className="absolute right-1 top-0 z-10 flex h-6 cursor-pointer items-center gap-1 rounded-md px-1.5 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-            >
-              <SquareIcon aria-hidden className="size-2.5 fill-current" />
-              Stop all
-            </button>
-          ) : null}
-          <ThreadRelationshipsPanel
-            environmentId={environmentId}
-            threadId={orchestrator.id}
-            showLineage
-            showSideChats={false}
-            agentsPanel={{
-              activeThreadId: props.activeThreadId,
-              ...(props.onNavigate === undefined ? {} : { onOpenThread: props.onNavigate }),
-            }}
-          />
-        </div>
+        <ThreadRelationshipsPanel
+          environmentId={environmentId}
+          threadId={orchestrator.id}
+          showLineage
+          showSideChats={false}
+          agentsPanel={{
+            activeThreadId: props.activeThreadId,
+            ...(props.onNavigate === undefined ? {} : { onOpenThread: props.onNavigate }),
+            actions: agentsWork ? (
+              <button
+                type="button"
+                onClick={() => void stopAll()}
+                className="flex h-6 cursor-pointer items-center gap-1 rounded-md px-1.5 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <SquareIcon aria-hidden className="size-2.5 fill-current" />
+                Stop all
+              </button>
+            ) : null,
+          }}
+        />
       ) : null}
       <ThreadDetailsSection
         headingId="project-agents-yours-heading"
