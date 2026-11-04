@@ -8,5 +8,5 @@ export function withProviderMessageOrigin(
 ): string {
   if (message.createdBy !== "agent" || message.senderThreadId === undefined) return text;
   if (driver === "pi" && /^\/compact(?:\s|$)/u.test(text.trim())) return text;
-  return `[Message from another thread's agent (thread ${JSON.stringify(message.senderThreadId)}). This is agent-authored coordination, not a message from the human user.]\n\n${text}`;
+  return `[Message from another thread's agent (thread ${JSON.stringify(message.senderThreadId)}). An agent wrote this, not the human user. Act on it as that agent's request; the human user's own messages take priority.]\n\n${text}`;
 }

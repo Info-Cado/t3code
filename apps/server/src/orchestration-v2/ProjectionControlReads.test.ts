@@ -339,7 +339,7 @@ it.effect.each(
         });
         const agentText = calls.at(-1);
         assert.include(agentText, 'thread "thread:sender"');
-        assert.include(agentText, "not a message from the human user");
+        assert.include(agentText, "not the human user");
         assert.isTrue(agentText?.endsWith("\n\nUse the smaller fix."));
         assert.equal(
           (yield* store.getProviderControlContext(threadId, target)).message?.text,
@@ -378,7 +378,7 @@ it.effect.each(
         const deliveredCommandText = calls.at(-1);
         if (commandDriver === "pi") assert.equal(deliveredCommandText, commandText);
         else {
-          assert.include(deliveredCommandText, "not a message from the human user");
+          assert.include(deliveredCommandText, "not the human user");
           assert.isTrue(deliveredCommandText?.endsWith(`\n\n${commandText}`));
         }
         const wrongSession = ProviderSessionId.make("session:wrong");

@@ -1158,7 +1158,7 @@ it.effect(
             testCase.senderThreadId !== undefined
           ) {
             assert.include(prompt.message.text, 'thread "thread:sender"');
-            assert.include(prompt.message.text, "not a message from the human user");
+            assert.include(prompt.message.text, "not the human user");
             assert.isTrue(prompt.message.text.endsWith(`\n\n${testCase.text}`));
           } else {
             assert.equal(prompt.message.text, testCase.text);
