@@ -6,7 +6,11 @@ import * as Layer from "effect/Layer";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
-import { assertOrchestratorOwnsTarget, readThread } from "./threadAccess.ts";
+import {
+  assertOrchestratorOwnsTarget,
+  assertOrchestratorTaskStaysInThread,
+  readThread,
+} from "./threadAccess.ts";
 
 const bareId = ThreadId.make("5d0b4a3e-8c1f-4a52-9d37-2f6c7e1b9a04");
 const client: McpInvocationContext.McpInvocationScope = {
@@ -71,6 +75,19 @@ it.effect("keeps an orchestrator to its own agents; other callers are not limite
       );
       expect(refused.code).toBe("capability_denied");
     }
+  }),
+);
+
+it.effect("keeps an orchestrator's scheduled tasks in its own thread", () =>
+  Effect.gen(function* () {
+    yield* assertOrchestratorTaskStaysInThread({ agentRole: "orchestrator" }, true);
+    yield* assertOrchestratorTaskStaysInThread({}, false);
+    yield* assertOrchestratorTaskStaysInThread(undefined, false);
+    const refused = yield* assertOrchestratorTaskStaysInThread(
+      { agentRole: "orchestrator" },
+      false,
+    ).pipe(Effect.flip);
+    expect(refused.code).toBe("capability_denied");
   }),
 );
 

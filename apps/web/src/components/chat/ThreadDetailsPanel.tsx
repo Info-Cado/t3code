@@ -94,11 +94,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     environmentId: props.environmentId,
     threadId: props.threadId,
   });
-  const root = useQuietThreadShell(
-    shell ? { environmentId: props.environmentId, threadId: shell.lineage.rootThreadId } : null,
-  );
-  // The agents panel already lists an orchestrator's tree; other threads keep their relatives here.
-  const showLineage = visible.lineage && !(orchestratorMode && root?.agentRole === "orchestrator");
+  // The agents panel lists the orchestrator's relations; other threads keep theirs here.
+  const showLineage = visible.lineage && !(orchestratorMode && shell?.agentRole === "orchestrator");
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,

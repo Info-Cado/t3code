@@ -96,6 +96,20 @@ export const assertOrchestratorOwnsTarget = Effect.fn("mcp.assertOrchestratorOwn
   },
 );
 
+/** An unbound task launches a top-level thread each run, and those are the user's to start. */
+export const assertOrchestratorTaskStaysInThread = (
+  caller: Pick<OrchestrationV2ThreadShell, "agentRole"> | undefined,
+  bound: boolean,
+) =>
+  caller?.agentRole === "orchestrator" && !bound
+    ? Effect.fail(
+        new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "An orchestrator's scheduled tasks post into its own thread.",
+        }),
+      )
+    : Effect.void;
+
 export const readCaller = Effect.fn("mcp.readCaller")(function* () {
   const scope = yield* McpInvocationContext.McpInvocationContext;
   if (!scope.capabilities.has("orchestration")) {

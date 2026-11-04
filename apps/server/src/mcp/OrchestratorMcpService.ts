@@ -123,7 +123,11 @@ import {
   runtimeModeRank,
   taskPrompt,
 } from "./delegatedTaskModes.ts";
-import { isLiveCallerShell, threadNotFound } from "./threadAccess.ts";
+import {
+  assertOrchestratorTaskStaysInThread,
+  isLiveCallerShell,
+  threadNotFound,
+} from "./threadAccess.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PeerForwarding from "../peer/PeerForwarding.ts";
 import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
@@ -1997,6 +2001,7 @@ const make = Effect.gen(function* () {
             : "bindToCurrentThread binds to this thread, which belongs to a different project.",
         );
       }
+      yield* assertOrchestratorTaskStaysInThread(parent?.thread, bindToCurrentThread);
       const modelSelection =
         parent?.thread.modelSelection ?? (yield* projectDefaultModelSelection(project));
       const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
@@ -2070,6 +2075,9 @@ const make = Effect.gen(function* () {
               ? "bindToCurrentThread needs an agent running inside a T3 thread."
               : "bindToCurrentThread binds to this thread, which belongs to a different project.",
           );
+        }
+        if (input.bindToCurrentThread !== undefined) {
+          yield* assertOrchestratorTaskStaysInThread(parent?.thread, input.bindToCurrentThread);
         }
         const threadId =
           input.bindToCurrentThread === undefined
