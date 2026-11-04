@@ -34,23 +34,25 @@ it.effect("keeps an orchestrator to its own agents; other callers are not limite
   Effect.gen(function* () {
     const shell = liveThreadShell(ThreadId.make("thread:orchestrator"));
     const orchestrator = { caller: { ...shell, agentRole: "orchestrator" as const } };
-    const lineage = (rootThreadId: string) => ({
+    const lineage = (rootThreadId: string, relationshipToParent: "subagent" | "fork" | null) => ({
       lineage: {
         parentThreadId: null,
-        relationshipToParent: null,
+        relationshipToParent,
         rootThreadId: ThreadId.make(rootThreadId),
       },
     });
 
-    yield* assertOrchestratorOwnsTarget(orchestrator, lineage("thread:orchestrator"));
-    yield* assertOrchestratorOwnsTarget({ caller: shell }, lineage("thread:users-own"));
-    yield* assertOrchestratorOwnsTarget({ caller: undefined }, lineage("thread:users-own"));
-    const refused = yield* assertOrchestratorOwnsTarget(
-      orchestrator,
-      lineage("thread:users-own"),
-    ).pipe(Effect.flip);
-
-    expect(refused.code).toBe("capability_denied");
+    yield* assertOrchestratorOwnsTarget(orchestrator, lineage("thread:orchestrator", "subagent"));
+    yield* assertOrchestratorOwnsTarget({ caller: shell }, lineage("thread:users-own", null));
+    yield* assertOrchestratorOwnsTarget({ caller: undefined }, lineage("thread:users-own", null));
+    for (const target of [
+      lineage("thread:users-own", null),
+      // A fork of the orchestrator keeps its root, and it is the user's.
+      lineage("thread:orchestrator", "fork"),
+    ]) {
+      const refused = yield* assertOrchestratorOwnsTarget(orchestrator, target).pipe(Effect.flip);
+      expect(refused.code).toBe("capability_denied");
+    }
   }),
 );
 

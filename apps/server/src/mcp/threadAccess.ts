@@ -77,7 +77,10 @@ export const assertOrchestratorOwnsTarget = (
   caller: Pick<Caller, "caller">,
   target: Pick<OrchestrationV2ThreadShell, "lineage">,
 ) =>
-  caller.caller?.agentRole === "orchestrator" && target.lineage.rootThreadId !== caller.caller.id
+  caller.caller?.agentRole === "orchestrator" &&
+  // A fork keeps its source's root, and it is still the user's.
+  (target.lineage.relationshipToParent !== "subagent" ||
+    target.lineage.rootThreadId !== caller.caller.id)
     ? Effect.fail(
         new OrchestratorMcpFailure({
           code: "capability_denied",
