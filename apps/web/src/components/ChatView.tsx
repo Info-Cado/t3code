@@ -356,6 +356,7 @@ import { observeResize } from "~/lib/observeResize";
 import { ThreadVisitWatermark } from "./chat/ThreadVisitWatermark";
 import { ChatTerminalDrawers } from "./chat/ChatTerminalDrawers";
 import { ChatRightPanel } from "./chat/ChatRightPanel";
+import { ProjectAgentsPanelHost, useProjectAgentsPanel } from "./chat/ProjectAgentsPanel";
 import { useDraftEnvironmentRouting } from "./chat/useDraftEnvironmentRouting";
 import { branchMismatchBannerItem } from "./chat/ThreadActivityBanners";
 import { ThreadNow } from "./chat/ThreadNow";
@@ -690,6 +691,7 @@ export default function ChatView(props: ChatViewProps) {
     return () => window.removeEventListener("dragend", clearWorkspaceFileDrag);
   }, [isWorkspaceFileDragActive]);
   const prefersPlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const agentsPanel = useProjectAgentsPanel({ embedded, sheet: prefersPlanSidebarSheet });
   const isMobileViewport = useMediaQuery("max-sm");
   const [workspaceLayoutElement, setWorkspaceLayoutElement] = useState<HTMLDivElement | null>(null);
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
@@ -3252,6 +3254,9 @@ export default function ChatView(props: ChatViewProps) {
     onToggleTerminal: toggleTerminalVisibilityStable,
     onToggleThreadPanel: toggleThreadPanelStable,
     onToggleRightPanel: toggleRightPanelStable,
+    agentsPanel: agentsPanel.available
+      ? { open: agentsPanel.open, onToggle: agentsPanel.toggle }
+      : null,
   } satisfies PanelLayoutControlsProps;
   const panelToggleControls = (
     <PanelLayoutControls
@@ -3937,6 +3942,15 @@ export default function ChatView(props: ChatViewProps) {
           />
         )}
       </div>
+
+      {agentsPanel.available && activeProject ? (
+        <ProjectAgentsPanelHost
+          state={agentsPanel}
+          project={activeProject}
+          activeThreadId={activeThread?.id ?? null}
+          rightPanelOpen={rightPanelOpen}
+        />
+      ) : null}
 
       {rightPanelPresent && activeThreadRef && !embedded ? (
         <ChatRightPanel

@@ -383,6 +383,11 @@ export function ThreadRelationshipsPanel(props: {
   readonly threadId: ThreadId;
   readonly showLineage: boolean;
   readonly showSideChats: boolean;
+  /** Set where these rows list a project's agents: the heading, and the agent now open. */
+  readonly agentsPanel?: {
+    readonly activeThreadId: ThreadId | null;
+    readonly onOpenThread?: () => void;
+  };
 }) {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
@@ -520,7 +525,8 @@ export function ThreadRelationshipsPanel(props: {
   const groups = [
     { id: "related", label: null, rows: related, expanded: true },
     { id: "active", label: null, rows: active, expanded: true },
-    { id: "previous", label: "Previous agents", rows: previous, expanded: false },
+    // Following the work means seeing what finished, so the agents panel keeps these open.
+    { id: "previous", label: "Previous agents", rows: previous, expanded: !!props.agentsPanel },
   ];
   // Tasks running in a linked environment have no thread here; they get their own rows.
   const remoteSubagents = (projection?.subagents ?? []).filter(
@@ -554,6 +560,7 @@ export function ThreadRelationshipsPanel(props: {
 
   // Idle children can be omitted from the shell; opening one loads its own detail.
   const openThread = (threadId: ThreadId) => {
+    props.agentsPanel?.onOpenThread?.();
     if (openSideChatTab(ref, graph.nodes.get(threadId)?.thread ?? null)) return;
     void navigate({
       to: "/$environmentId/$threadId",
@@ -767,6 +774,7 @@ export function ThreadRelationshipsPanel(props: {
               size="sm"
               variant="ghost"
               part={workflowGroup ? "primary" : "row"}
+              aria-current={props.agentsPanel?.activeThreadId === threadId ? "true" : undefined}
               onClick={() => openThread(threadId)}
             />
           }
@@ -795,7 +803,13 @@ export function ThreadRelationshipsPanel(props: {
       );
     }
     return (
-      <li key={threadId} className="group relative flex h-8 items-center rounded-lg">
+      <li
+        key={threadId}
+        className={cn(
+          "group relative flex h-8 items-center rounded-lg",
+          props.agentsPanel?.activeThreadId === threadId && "bg-accent",
+        )}
+      >
         {isMergeTarget ? (
           <div className={THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS}>
             <Tooltip>
@@ -889,7 +903,7 @@ export function ThreadRelationshipsPanel(props: {
       {lineageVisible ? (
         <ThreadDetailsSection
           headingId="thread-details-lineage-heading"
-          title={runningCount > 0 ? `Lineage · ${runningCount} running` : "Lineage"}
+          title={`${props.agentsPanel ? "Agents" : "Lineage"}${runningCount > 0 ? ` · ${runningCount} running` : ""}`}
           // A lone "Previous agents" row names itself; the heading returns for status or actions.
           showHeading={
             runningCount > 0 ||
@@ -900,7 +914,7 @@ export function ThreadRelationshipsPanel(props: {
           }
           data-thread-relationships-panel
           actions={
-            canDetach ? (
+            canDetach && !props.agentsPanel ? (
               <Menu>
                 <MenuTrigger
                   render={

@@ -88,6 +88,9 @@ interface ThreadDetailsPanelProps extends Pick<
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
+  // The agents panel lists these in orchestrator mode.
+  const orchestratorMode = useClientSettings((settings) => settings.orchestratorModeEnabled);
+  const showLineage = visible.lineage && !orchestratorMode;
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,
@@ -249,11 +252,11 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
-              {density === "full" && !props.draftId && (visible.lineage || visible.sideChats) ? (
+              {density === "full" && !props.draftId && (showLineage || visible.sideChats) ? (
                 <ThreadRelationshipsPanel
                   environmentId={props.environmentId}
                   threadId={props.threadId}
-                  showLineage={visible.lineage}
+                  showLineage={showLineage}
                   showSideChats={visible.sideChats}
                 />
               ) : null}

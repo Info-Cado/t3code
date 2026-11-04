@@ -33,6 +33,7 @@ import {
   EyeIcon,
   type LucideIcon,
   MessagesSquareIcon,
+  NetworkIcon,
   Redo2Icon,
   PencilIcon,
 } from "lucide-react";
@@ -450,16 +451,31 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     (attachment) => !isImageAttachment(attachment) && !isFileAttachment(attachment),
   );
   const userMessage = resolveUserMessagePresentation(row.message);
-  // Messages from other agents fold to one line so the user's own messages stay easy to find.
-  const folded = userMessage.attribution === "agent";
-  const [expanded, setExpanded] = useState(false);
-  const revealFoldRef = findRevealRef(() => setExpanded(true));
+  const fromAgent = userMessage.attribution === "agent";
   const senderShell = useQuietThreadShell(
-    folded && senderThreadId
+    fromAgent && senderThreadId
       ? { environmentId: ctx.activeThreadEnvironmentId, threadId: senderThreadId }
       : null,
   );
+  // Reading an orchestrator's brief is how the user follows its work, so it stays open.
+  const fromOrchestrator = senderShell?.agentRole === "orchestrator";
+  // Messages from other agents fold to one line so the user's own messages stay easy to find.
+  const folded = fromAgent && !fromOrchestrator;
+  const [expanded, setExpanded] = useState(false);
+  const revealFoldRef = findRevealRef(() => setExpanded(true));
   const senderLabel = senderShell?.title.trim() || "Agent";
+  const thisThread = useQuietThreadShell(ctx.threadRef ?? null);
+  const parentThread = useQuietThreadShell(
+    thisThread?.lineage.parentThreadId
+      ? {
+          environmentId: ctx.activeThreadEnvironmentId,
+          threadId: thisThread.lineage.parentThreadId,
+        }
+      : null,
+  );
+  // Two people give this agent instructions, so both are named.
+  const namedYou =
+    parentThread?.agentRole === "orchestrator" && !fromAgent && userMessage.attribution === null;
   const resolvedContext = resolveUserMessageContext({ ...row.message, text: userMessage.text });
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const revertTurnCount = row.revertTurnCount;
@@ -824,9 +840,26 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
   return (
     <div
-      className="group @container flex flex-col items-end gap-1"
-      data-user-message-attribution={folded ? "agent" : undefined}
+      className={cn(
+        "group @container flex flex-col gap-1",
+        fromOrchestrator ? "items-start" : "items-end",
+      )}
+      data-user-message-attribution={
+        fromOrchestrator ? "orchestrator" : folded ? "agent" : undefined
+      }
     >
+      {fromOrchestrator ? (
+        <p className="ms-1 flex items-center gap-1 text-2xs font-medium text-info-foreground">
+          <NetworkIcon aria-hidden className="size-3" />
+          Orchestrator
+        </p>
+      ) : null}
+      {/* The row's heading already names the author for screen readers. */}
+      {namedYou ? (
+        <p aria-hidden className="me-1 text-2xs text-muted-foreground">
+          You
+        </p>
+      ) : null}
       {userMessage.attribution === "t3code" ? (
         <p
           className="me-1 text-2xs text-muted-foreground/70"
@@ -862,6 +895,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           userMessage.attribution === "guest"
             ? guestBubbleClassName(false)
             : !mediaOnly && !fileCardsOnly && !audioOnly && "bg-message",
+          fromOrchestrator && "rounded-tl-md border-s-2 border-primary",
           !folded && !mediaOnly && !fileCardsOnly && !audioOnly && "p-3",
           folded && expanded && "w-full",
         )}

@@ -269,9 +269,9 @@ layouts with an inspector, its thread opens beside the parent. Maximize it to
 fill the screen; close the full-screen view to return to the parent and inspector.
 Stop on a thread also stops the subagents it delegated to.
 
-Subagent threads started by the agent can't take messages; message the parent
-thread instead. When such a subagent needs an approval or an answer, the parent
-thread asks for it.
+Subagents a provider runs itself can't take messages; message the parent thread
+instead. When such a subagent needs an approval or an answer, the parent thread
+asks for it. Subagents started through T3 Code take messages like any thread.
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it

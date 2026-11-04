@@ -454,6 +454,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
   },
   {
+    id: "orchestrator-mode",
+    title: "Orchestrator mode",
+    to: "/settings/labs",
+    searchTerms: ["beta agent delegate subagents project manager sidebar projects"],
+  },
+  {
     id: "boring-sidebar",
     title: "Boring sidebar (group by project)",
     to: "/settings/labs",

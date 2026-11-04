@@ -1,4 +1,4 @@
-import { PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "lucide-react";
+import { BotIcon, PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "lucide-react";
 import { Maximize2, Minimize2 } from "lucide";
 import { MorphIcon } from "~/components/MorphIcon";
 import { memo, type ReactNode } from "react";
@@ -28,6 +28,8 @@ export interface PanelLayoutControlsProps {
   onToggleTerminal: () => void;
   onToggleThreadPanel: () => void;
   onToggleRightPanel: () => void;
+  /** Set in orchestrator mode, where a project's agents have a panel of their own. */
+  agentsPanel?: { readonly open: boolean; readonly onToggle: () => void } | null;
 }
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
@@ -48,6 +50,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   onToggleTerminal,
   onToggleThreadPanel,
   onToggleRightPanel,
+  agentsPanel,
 }: PanelLayoutControlsProps) {
   const threadPanelToggle = (
     <Toggle
@@ -82,6 +85,23 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
+      {agentsPanel ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" />}>
+            <Toggle
+              className="shrink-0 [-webkit-app-region:no-drag]"
+              pressed={agentsPanel.open}
+              onPressedChange={agentsPanel.onToggle}
+              aria-label="Toggle agents"
+              variant="ghost"
+              size="sm"
+            >
+              <BotIcon className="size-4" />
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">Toggle agents</TooltipPopup>
+        </Tooltip>
+      ) : null}
       {showThreadPanelControl ? threadPanelControl : null}
       {showTerminalControl ? (
         <Tooltip>

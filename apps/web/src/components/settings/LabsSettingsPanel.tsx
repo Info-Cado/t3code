@@ -19,6 +19,7 @@ export function LabsSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection id="beta" title="Beta">
+        <OrchestratorModeRow />
         <BoringSidebarRow />
         <BoringSidebarMultilineRow />
         {/* Clerk is only mounted when this build has T3 Connect. */}
@@ -28,6 +29,26 @@ export function LabsSettingsPanel() {
       </SettingsSection>
       <LegacyFeaturesSection />
     </SettingsPageContainer>
+  );
+}
+
+function OrchestratorModeRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("orchestrator-mode")}
+      description="One agent runs each project and hands the work to other agents. The sidebar lists projects."
+      control={
+        <Switch
+          checked={settings.orchestratorModeEnabled}
+          onCheckedChange={(checked) =>
+            updateSettings({ orchestratorModeEnabled: Boolean(checked) })
+          }
+          aria-label="Orchestrator mode"
+        />
+      }
+    />
   );
 }
 

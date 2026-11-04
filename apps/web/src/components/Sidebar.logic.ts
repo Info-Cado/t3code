@@ -618,6 +618,8 @@ export function resolveSidebarRowThreadId(
 export function filterSidebarV2VisibleThreads<
   T extends Pick<SidebarThreadSummary, "archivedAt" | "environmentId" | "id" | "lineage"> & {
     projectId: string;
+    agentRole?: "orchestrator";
+    latestUserMessageAt?: string | null;
   },
 >(
   threads: readonly T[],
@@ -627,6 +629,8 @@ export function filterSidebarV2VisibleThreads<
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
+      // An orchestrator nobody has written to yet is only a place in orchestrator mode.
+      !(thread.agentRole === "orchestrator" && thread.latestUserMessageAt == null) &&
       !isShownUnderParent(
         { environmentId: thread.environmentId, threadId: thread.id },
         thread.lineage,
@@ -932,6 +936,34 @@ export function resolveSidebarFolderDot(
   if (hasUnread) return "unread";
   if (statuses.has("working")) return "working";
   return null;
+}
+
+/**
+ * One project's state in orchestrator mode: what its own threads need from the user, or that its
+ * agents still work. An agent's result goes to the orchestrator, so it needs nothing from the user
+ * by itself, and approvals it asks for already reach the thread above it.
+ */
+export function resolveSidebarProjectStatus(
+  threads: ReadonlyArray<
+    ThreadStatusInput & SidebarThreadStatusInput & Pick<SidebarThreadSummary, "lineage">
+  >,
+): ReturnType<typeof resolveSidebarFolderDot> {
+  return (
+    resolveSidebarFolderDot(threads.filter((thread) => isListedThreadLineage(thread.lineage))) ??
+    (threads.some((thread) => resolveSidebarThreadStatus(thread) === "working") ? "working" : null)
+  );
+}
+
+/** Projects that need the user come first; the rest keep the user's order. */
+export function sortProjectsByAttention<T>(
+  projects: ReadonlyArray<T>,
+  status: (project: T) => ReturnType<typeof resolveSidebarFolderDot>,
+): ReadonlyArray<T> {
+  const needsUser = (project: T) => {
+    const state = status(project);
+    return state === "attention" || state === "failed";
+  };
+  return [...projects.filter(needsUser), ...projects.filter((project) => !needsUser(project))];
 }
 
 /**

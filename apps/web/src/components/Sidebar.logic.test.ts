@@ -35,6 +35,8 @@ import {
   resolveSidebarDropVerb,
   groupSidebarThreadsByProject,
   resolveSidebarFolderDot,
+  resolveSidebarProjectStatus,
+  sortProjectsByAttention,
   sidebarFolderExpansionKeys,
 } from "./Sidebar.logic";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
@@ -1608,6 +1610,77 @@ describe("groupSidebarThreadsByProject", () => {
       { projectKey: "t3code", threads: ["a", "b"] },
       { projectKey: "fleet", threads: [] },
     ]);
+  });
+});
+
+describe("resolveSidebarProjectStatus", () => {
+  const idle = {
+    hasActionableProposedPlan: false,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    interactionMode: "default" as const,
+    latestRun: makeLatestRun(),
+    lastVisitedAt: "2026-03-09T10:06:00.000Z",
+    runtime: null,
+    lineage: {
+      parentThreadId: null,
+      relationshipToParent: null,
+      rootThreadId: ThreadId.make("thread-orchestrator"),
+    },
+  };
+  const agent = {
+    ...idle,
+    lineage: {
+      parentThreadId: ThreadId.make("thread-orchestrator"),
+      relationshipToParent: "subagent" as const,
+      rootThreadId: ThreadId.make("thread-orchestrator"),
+    },
+  };
+  const runtime = {
+    status: "running" as const,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: "Codex",
+    lastError: null,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  };
+
+  it("says Working while only an agent runs, because its parent has ended its turn", () => {
+    expect(resolveSidebarProjectStatus([idle, { ...agent, runtime }])).toBe("working");
+    expect(resolveSidebarProjectStatus([idle, agent])).toBeNull();
+  });
+
+  it("leaves an agent's result and failure to the orchestrator", () => {
+    const failed = { ...runtime, status: "failed" as const };
+    const unread = { lastVisitedAt: "2026-03-09T10:04:00.000Z" };
+    expect(resolveSidebarProjectStatus([idle, { ...agent, ...unread }])).toBeNull();
+    expect(resolveSidebarProjectStatus([idle, { ...agent, runtime: failed }])).toBeNull();
+    expect(resolveSidebarProjectStatus([{ ...idle, runtime: failed }])).toBe("failed");
+    expect(resolveSidebarProjectStatus([{ ...idle, ...unread }])).toBe("unread");
+  });
+
+  it("puts what needs the user ahead of an agent that still runs", () => {
+    expect(
+      resolveSidebarProjectStatus([
+        { ...idle, pendingSubagentRequest: "approval" as const },
+        { ...agent, runtime },
+      ]),
+    ).toBe("attention");
+  });
+});
+
+describe("sortProjectsByAttention", () => {
+  it("lifts projects that need the user and keeps every other project's place", () => {
+    const status = {
+      a: null,
+      b: "working",
+      c: "attention",
+      d: "unread",
+      e: "failed",
+    } as const;
+    expect(
+      sortProjectsByAttention(["a", "b", "c", "d", "e"] as const, (project) => status[project]),
+    ).toEqual(["c", "e", "a", "b", "d"]);
   });
 });
 

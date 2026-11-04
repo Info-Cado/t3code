@@ -126,6 +126,8 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useOpenProjectOrchestrator } from "../hooks/useOpenProjectOrchestrator";
+import { SidebarProjectList } from "./sidebar/SidebarProjectList";
 import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
 import { useProjectPin } from "../hooks/useProjectGroupUpdate";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
@@ -1008,6 +1010,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   });
   const boringSidebarEnabled = useBoringSidebarEnabled();
   const legacySidebarEnabled = useClientSettings((settings) => settings.legacySidebarEnabled);
+  const orchestratorModeEnabled = useClientSettings((settings) => settings.orchestratorModeEnabled);
+  const openProjectOrchestrator = useOpenProjectOrchestrator();
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
@@ -3276,7 +3280,27 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               </p>
             )
           ) : null}
-          {!isSearchingThreads ? (
+          {!isSearchingThreads && orchestratorModeEnabled ? (
+            <SidebarProjectList
+              groups={scopedProjectGroups.length > 0 ? scopedProjectGroups : scopeGroups}
+              threads={threads.filter((thread) => {
+                const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+                return (
+                  thread.archivedAt === null &&
+                  !settledThreadKeys.has(key) &&
+                  !snoozedThreadKeys.has(key)
+                );
+              })}
+              activeThread={routeThreadRef}
+              onOpen={(group) => {
+                if (isMobile) setOpenMobile(false);
+                void openProjectOrchestrator(group);
+              }}
+              onNewThread={startThreadInProjectFolder}
+              onContextMenu={handleProjectFolderContextMenu}
+            />
+          ) : null}
+          {!isSearchingThreads && !orchestratorModeEnabled ? (
             <TooltipProvider
               key="sidebar-thread-tooltips-150"
               delay={150}

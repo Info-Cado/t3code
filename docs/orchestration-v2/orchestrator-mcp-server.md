@@ -552,6 +552,33 @@ results use the latest assistant content from the final work turn.
 - Calls without `clientRequestId` receive a generated request key and create
   new work.
 
+### Orchestrator threads
+
+A thread created with `agentRole: "orchestrator"` runs one project through its
+agents. The role is stored on the thread and never changes. It is not inherited
+by children or forks.
+
+Its limits sit where they hold for every client:
+
+- `RuntimePolicy` gives Claude and Codex a read-only sandbox. Runtime modes would
+  cap its children too, so its mode stays what it was. Other providers' sandboxes
+  would also close T3's tools, so only its instructions apply there
+  (`orchestratorCannotEdit`).
+- `writesThreads` refuses a write to a thread outside its tree, with
+  `capability_denied`. It may read them.
+- `create_threads` and `t3_thread_launch` are hidden: a top-level thread is the
+  user's own.
+- `delegate_task` is always async, so its turn ends while agents run.
+
+Its rules and a short list of its agents go in front of each turn's prompt, not in
+the system prompt. One site covers every provider, the rules survive compaction,
+and stored text stays what its author wrote. The list also carries what the user
+wrote directly to an agent since the last turn, so that message wakes nothing.
+
+`thread.stop` on it ends the current turn only. Completion delivery and pull
+request watches stay, because its agents are the project's running work. Only
+`stopDelegatedTasks: true` stops them.
+
 Expected denials use the typed `OrchestratorMcpFailure` result:
 
 ```text
