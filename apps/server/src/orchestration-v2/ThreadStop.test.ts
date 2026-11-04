@@ -692,6 +692,52 @@ it.effect("Stop all on an orchestrator stops its agents too", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect.each([
+  { name: "wakes an ordinary parent", orchestrated: false, tasks: 2 },
+  { name: "wakes nothing under an orchestrator", orchestrated: true, tasks: 1 },
+])("the user's message to a finished agent $name", ({ orchestrated, tasks }) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make(`thread:follow-up:${orchestrated}`);
+    if (orchestrated) {
+      yield* createOrchestratorWithAgent(threadId);
+    } else {
+      yield* createWatchingThread(threadId, 1);
+      yield* send(threadId, "fix it", "start_immediately");
+      yield* delegate(threadId, `task of ${threadId}`);
+    }
+    const now = yield* DateTime.now;
+    const parent = yield* orchestrator.getThreadProjection(threadId);
+    const task = parent.subagents[0]!;
+    const agentThreadId = task.childThreadId!;
+    yield* projections.apply({
+      id: EventId.make(`event:follow-up:${orchestrated}:task-done`),
+      type: "subagent.updated",
+      threadId,
+      nodeId: task.id,
+      driver: task.driver,
+      providerInstanceId: task.providerInstanceId,
+      occurredAt: now,
+      payload: { ...task, status: "completed", result: "Done.", completedAt: now },
+    });
+    const agentRun = (yield* orchestrator.getThreadProjection(agentThreadId)).runs[0]!;
+    yield* projections.apply({
+      id: EventId.make(`event:follow-up:${orchestrated}:run-done`),
+      type: "run.updated",
+      threadId: agentThreadId,
+      runId: agentRun.id,
+      occurredAt: now,
+      payload: { ...agentRun, status: "completed", completedAt: now },
+    });
+
+    yield* send(agentThreadId, "one more thing", "start_immediately");
+
+    const after = yield* orchestrator.getThreadProjection(threadId);
+    assert.lengthOf(after.subagents, tasks);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a project has one live orchestrator, and archiving it frees the place", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
