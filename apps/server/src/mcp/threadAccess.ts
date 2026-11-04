@@ -73,22 +73,28 @@ export interface Caller {
 }
 
 /** Threads outside an orchestrator's own agents are the user's: it may read them, not change them. */
-export const assertOrchestratorOwnsTarget = (
-  caller: Pick<Caller, "caller">,
-  target: Pick<OrchestrationV2ThreadShell, "lineage">,
-) =>
-  caller.caller?.agentRole === "orchestrator" &&
-  // A fork keeps its source's root, and it is still the user's.
-  (target.lineage.relationshipToParent !== "subagent" ||
-    target.lineage.rootThreadId !== caller.caller.id)
-    ? Effect.fail(
-        new OrchestratorMcpFailure({
-          code: "capability_denied",
-          message:
-            "This thread is the user's own. You can read it, but only the user can write to it.",
-        }),
-      )
-    : Effect.void;
+export const assertOrchestratorOwnsTarget = Effect.fn("mcp.assertOrchestratorOwnsTarget")(
+  function* (
+    caller: Pick<Caller, "caller" | "threads">,
+    target: Pick<OrchestrationV2ThreadShell, "lineage">,
+  ) {
+    const orchestrator = caller.caller;
+    if (orchestrator?.agentRole !== "orchestrator") return;
+    // Every link up to it must be an agent's. A fork breaks the chain: it is the user's, and so
+    // is what it starts, even though a fork keeps its source's root.
+    let current: Pick<OrchestrationV2ThreadShell, "lineage"> | null = target;
+    while (current?.lineage.relationshipToParent === "subagent") {
+      const parentId: ThreadId | null = current.lineage.parentThreadId;
+      if (parentId === null) break;
+      if (parentId === orchestrator.id) return;
+      current = yield* caller.threads.getThreadShell(parentId).pipe(Effect.mapError(unavailable));
+    }
+    return yield* new OrchestratorMcpFailure({
+      code: "capability_denied",
+      message: "This thread is the user's own. You can read it, but only the user can write to it.",
+    });
+  },
+);
 
 export const readCaller = Effect.fn("mcp.readCaller")(function* () {
   const scope = yield* McpInvocationContext.McpInvocationContext;

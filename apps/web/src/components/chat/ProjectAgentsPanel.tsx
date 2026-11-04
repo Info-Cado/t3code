@@ -118,8 +118,8 @@ function ProjectAgents(props: {
     orchestrator !== null &&
     shells.some(
       (thread) =>
-        thread.lineage.rootThreadId === orchestrator.id &&
-        thread.id !== orchestrator.id &&
+        thread.lineage.relationshipToParent === "subagent" &&
+        thread.lineage.parentThreadId === orchestrator.id &&
         !["ready", "failed", "limited"].includes(resolveSidebarThreadStatus(thread)),
     );
   const providers = useEnvironmentProviders().get(environmentId);

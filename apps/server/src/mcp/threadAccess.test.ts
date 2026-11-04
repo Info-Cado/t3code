@@ -34,23 +34,41 @@ it.effect("keeps an orchestrator to its own agents; other callers are not limite
   Effect.gen(function* () {
     const shell = liveThreadShell(ThreadId.make("thread:orchestrator"));
     const orchestrator = { caller: { ...shell, agentRole: "orchestrator" as const } };
-    const lineage = (rootThreadId: string, relationshipToParent: "subagent" | "fork" | null) => ({
+    const rootThreadId = shell.id;
+    const lineage = (parent: string | null, relationshipToParent: "subagent" | "fork" | null) => ({
       lineage: {
-        parentThreadId: null,
+        parentThreadId: parent === null ? null : ThreadId.make(parent),
         relationshipToParent,
-        rootThreadId: ThreadId.make(rootThreadId),
+        rootThreadId,
       },
     });
+    const shells = new Map([
+      ["thread:agent", lineage("thread:orchestrator", "subagent")],
+      ["thread:fork", lineage("thread:orchestrator", "fork")],
+    ]);
+    const threads = {
+      getThreadShell: (threadId: ThreadId) => Effect.succeed(shells.get(threadId) ?? null),
+    } as never;
+    const fromOrchestrator = { ...orchestrator, threads };
 
-    yield* assertOrchestratorOwnsTarget(orchestrator, lineage("thread:orchestrator", "subagent"));
-    yield* assertOrchestratorOwnsTarget({ caller: shell }, lineage("thread:users-own", null));
-    yield* assertOrchestratorOwnsTarget({ caller: undefined }, lineage("thread:users-own", null));
+    // An agent and its own sub-agent are the orchestrator's.
+    yield* assertOrchestratorOwnsTarget(
+      fromOrchestrator,
+      lineage("thread:orchestrator", "subagent"),
+    );
+    yield* assertOrchestratorOwnsTarget(fromOrchestrator, lineage("thread:agent", "subagent"));
+    // Other callers are not limited.
+    yield* assertOrchestratorOwnsTarget({ caller: shell, threads }, lineage(null, null));
+    yield* assertOrchestratorOwnsTarget({ caller: undefined, threads }, lineage(null, null));
     for (const target of [
-      lineage("thread:users-own", null),
-      // A fork of the orchestrator keeps its root, and it is the user's.
+      lineage(null, null),
+      // A fork of the orchestrator keeps its root, and it is the user's, as is what it starts.
       lineage("thread:orchestrator", "fork"),
+      lineage("thread:fork", "subagent"),
     ]) {
-      const refused = yield* assertOrchestratorOwnsTarget(orchestrator, target).pipe(Effect.flip);
+      const refused = yield* assertOrchestratorOwnsTarget(fromOrchestrator, target).pipe(
+        Effect.flip,
+      );
       expect(refused.code).toBe("capability_denied");
     }
   }),
