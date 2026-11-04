@@ -11399,9 +11399,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (candidate) => candidate.id === run.userMessageId,
     );
     const completionCohortRunId = completionMessage?.delegatedCompletion?.parentRunId ?? run.id;
-    // Every Stop reaches here, not only thread.stop: mobile names the run, and /goal interrupts.
     const stopRemainingWork = () =>
-      (command.keepDelegatedWork ?? projection.thread.agentRole === "orchestrator")
+      command.keepDelegatedWork === true
         ? Effect.void
         : command.holdQueue === true
           ? holdStoppedThread({
@@ -13350,9 +13349,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "subagent.stop":
         yield* dispatchSubagentStop(command, events, effects);
         break;
-      case "run.interrupt":
-        cancelUnsettledEffects = yield* dispatchRunInterrupt(command, events, effects);
-        if (command.holdQueue === true) {
+      case "run.interrupt": {
+        // Every way to stop a run comes through here: mobile names the run, and /goal interrupts.
+        const keepsAgents =
+          command.keepDelegatedWork ??
+          (yield* findThread(command.threadId))?.agentRole === "orchestrator";
+        const interrupt = keepsAgents
+          ? { ...command, keepDelegatedWork: true, holdQueue: false }
+          : command;
+        cancelUnsettledEffects = yield* dispatchRunInterrupt(interrupt, events, effects);
+        if (interrupt.holdQueue === true) {
           // Stop must still commit when a child can't be read, so a failed repair's
           // partial events are dropped.
           const repairEvents = yield* Ref.make(yield* Ref.get(events));
@@ -13378,6 +13384,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ]);
         }
         break;
+      }
       case "thread.stop":
         cancelUnsettledEffects = yield* dispatchThreadStop(command, events, effects);
         break;

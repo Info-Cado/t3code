@@ -691,6 +691,7 @@ it.effect("a Stop that names the run, as mobile sends it, keeps an orchestrator'
     assert.notEqual(projection.subagents[0]?.completionDelivery?.state, "disposed");
     assert.notEqual(projection.runs[0]?.delegatedCompletion?.disposition, "stopped");
     assert.deepEqual((yield* threadState(threadId)).watched, [1]);
+    assert.lengthOf(yield* agentStopWalks("stop-orchestrator-run"), 0);
   }).pipe(Effect.provide(layerTest)),
 );
 
@@ -842,8 +843,9 @@ it.effect("two devices opening one project at once make one orchestrator", () =>
         createdBy: "user",
         creationSource: "web",
       });
-    const results = yield* Effect.all(
-      ["laptop", "phone", "tablet"].map((device) => Effect.exit(create(device))),
+    const results = yield* Effect.forEach(
+      ["laptop", "phone", "tablet"],
+      (device) => Effect.exit(create(device)),
       { concurrency: "unbounded" },
     );
     assert.lengthOf(results.filter(Exit.isSuccess), 1);
