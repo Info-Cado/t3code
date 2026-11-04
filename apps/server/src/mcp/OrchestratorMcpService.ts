@@ -2370,7 +2370,7 @@ const make = Effect.gen(function* () {
           ...input,
           target: { ...input.target, environmentId },
         });
-        return yield* input.mode === "wait"
+        return yield* input.mode === "wait" && scope.thread.orchestrator !== true
           ? awaitTask(scope, taskId, input.timeoutMs)
           : readTask(scope, taskId, false, true);
       }

@@ -778,6 +778,26 @@ it.effect("a project has one live orchestrator, and archiving it frees the place
     yield* create("thread:third", "orchestrator");
     const third = yield* orchestrator.getThreadProjection(ThreadId.make("thread:third"));
     assert.equal(third.thread.agentRole, "orchestrator");
+
+    // Bringing the first one back would make two.
+    const unarchived = yield* Effect.exit(
+      orchestrator.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make("unarchive:first"),
+        threadId: ThreadId.make("thread:first"),
+      }),
+    );
+    assert.isTrue(Exit.isFailure(unarchived));
+    yield* orchestrator.dispatch({
+      type: "thread.archive",
+      commandId: CommandId.make("archive:third"),
+      threadId: ThreadId.make("thread:third"),
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.unarchive",
+      commandId: CommandId.make("unarchive:first:again"),
+      threadId: ThreadId.make("thread:first"),
+    });
   }).pipe(Effect.provide(layerTest)),
 );
 

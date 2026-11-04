@@ -42,7 +42,9 @@ const stopEarlierBackgroundWork = ({
   backgroundWorkAfterStop,
   stalledRun,
   workflowMember = false,
+  orchestratorRole = false,
 }: {
+  readonly orchestratorRole?: boolean;
   readonly wakeAfterStop?: boolean;
   readonly failedStart?: boolean;
   readonly backgroundWorkAfterStop?: "running" | "unknown";
@@ -175,6 +177,7 @@ const stopEarlierBackgroundWork = ({
           interactionMode: "default",
           branch: null,
           worktreePath: cwd,
+          ...(orchestratorRole ? { agentRole: "orchestrator" as const } : {}),
           createdBy: "user",
           creationSource: "web",
         });
@@ -1029,6 +1032,10 @@ const stopEarlierBackgroundWork = ({
 
 it.effect("Stop reaches background work an earlier provider thread still runs", () =>
   stopEarlierBackgroundWork({}),
+);
+
+it.effect("Stop on an orchestrator reaches its background work too", () =>
+  stopEarlierBackgroundWork({ orchestratorRole: true }),
 );
 
 it.effect("Stop settles workflow members without subagent turn items", () =>

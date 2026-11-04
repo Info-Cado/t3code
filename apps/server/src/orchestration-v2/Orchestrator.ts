@@ -1,5 +1,6 @@
 import type {
   GuestShareId,
+  ProjectId,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
@@ -2795,6 +2796,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       { concurrency: 1, discard: true },
     );
 
+  const refuseSecondOrchestrator = Effect.fn("orchestrationV2.refuseSecondOrchestrator")(function* (
+    command: Extract<
+      OrchestrationV2Command,
+      { readonly type: "thread.create" | "thread.unarchive" }
+    >,
+    projectId: ProjectId,
+  ) {
+    const live = yield* projectionStore
+      .findLiveOrchestratorThreadId({ projectId, requestedBy: command.threadId })
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+    if (live !== null) {
+      return yield* new OrchestratorCommandRejectedError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Project ${projectId} already has an orchestrator: ${live}.`,
+      });
+    }
+  });
+
   const dispatchThreadCreate = Effect.fn("orchestrationV2.dispatch.threadCreate")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.create" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -2820,23 +2844,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     if (command.agentRole === "orchestrator") {
-      const live = yield* projectionStore
-        .findLiveOrchestratorThreadId({
-          projectId: command.projectId,
-          requestedBy: command.threadId,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-          ),
-        );
-      if (live !== null) {
-        return yield* new OrchestratorCommandRejectedError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: `Project ${command.projectId} already has an orchestrator: ${live}.`,
-        });
-      }
+      yield* refuseSecondOrchestrator(command, command.projectId);
     }
 
     const now = yield* DateTime.now;
@@ -3280,6 +3288,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandType: command.type,
         cause: `Thread ${command.threadId} is not archived.`,
       });
+    }
+    if (command.type === "thread.unarchive" && thread.agentRole === "orchestrator") {
+      yield* refuseSecondOrchestrator(command, thread.projectId);
     }
     if (
       (command.type === "thread.settle" ||
@@ -11950,28 +11961,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
     if (projection.thread.deletedAt !== null) return undefined;
-    if (projection.thread.agentRole === "orchestrator" && command.stopDelegatedTasks !== true) {
-      const turn = projection.runs.findLast(
-        (run) =>
-          run.status === "preparing" || run.status === "starting" || run.status === "running",
-      );
-      return turn === undefined
-        ? undefined
-        : yield* dispatchRunInterrupt(
-            {
-              type: "run.interrupt",
-              commandId: command.commandId,
-              threadId: command.threadId,
-              runId: turn.id,
-              keepDelegatedWork: true,
-              ...(command.reason === undefined ? {} : { reason: command.reason }),
-            },
-            events,
-            effects,
-          );
-    }
+    // An orchestrator's agents are the project's running work: only Stop all reaches them.
+    const keepAgents =
+      projection.thread.agentRole === "orchestrator" && command.stopDelegatedTasks !== true;
     // Queued after the interrupt, since a thread's effects run in order.
     const stopDelegatedTasks =
+      keepAgents ||
       command.stopDelegatedTasks === false ||
       !projection.subagents.some(
         (task) => task.origin === "app_owned" && task.childThreadId !== null,
@@ -11990,9 +11985,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         turnItems: projection.turnItems,
         activeProviderThreadId: projection.thread.activeProviderThreadId,
         runs: projection.runs,
-      }).length > 0
+      }).some((task) => !keepAgents || task.kind !== "subagent")
         ? latestRun
         : undefined);
+    if (keepAgents && target === undefined) return undefined;
     if (target !== undefined) {
       const interruptEvents = yield* Ref.make<Array<OrchestrationV2DomainEvent>>([]);
       const interruptEffects = yield* Ref.make<Array<PendingOrchestrationEffectV2>>([]);
@@ -12003,7 +11999,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             threadId: command.threadId,
             runId: target.id,
-            holdQueue: true,
+            ...(keepAgents ? { keepDelegatedWork: true } : { holdQueue: true }),
             ...(command.reason === undefined ? {} : { reason: command.reason }),
           },
           interruptEvents,
@@ -12025,6 +12021,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         runId: target.id,
         cause: interrupted.cause,
       });
+      if (keepAgents) return undefined;
     }
     const now = yield* DateTime.now;
     // Record that Stop reached the turn it could not interrupt and the thread's last executed

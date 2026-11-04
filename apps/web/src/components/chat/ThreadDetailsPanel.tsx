@@ -31,6 +31,7 @@ import {
 import { ThreadDetailsItemsMenuItems } from "./ThreadDetailsItemsMenu";
 import { resolveThreadDetailsVisibility, THREAD_DETAILS_ITEMS } from "./threadDetailsItems";
 import { useClientSettings } from "../../hooks/useSettings";
+import { useQuietThreadShell } from "../../state/entities";
 import { cn } from "../../lib/utils";
 import { SlidersHorizontalIcon } from "lucide-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
@@ -88,9 +89,16 @@ interface ThreadDetailsPanelProps extends Pick<
 
 export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   const visible = useClientSettings(resolveThreadDetailsVisibility);
-  // The agents panel lists these in orchestrator mode.
   const orchestratorMode = useClientSettings((settings) => settings.orchestratorModeEnabled);
-  const showLineage = visible.lineage && !orchestratorMode;
+  const shell = useQuietThreadShell({
+    environmentId: props.environmentId,
+    threadId: props.threadId,
+  });
+  const root = useQuietThreadShell(
+    shell ? { environmentId: props.environmentId, threadId: shell.lineage.rootThreadId } : null,
+  );
+  // The agents panel already lists an orchestrator's tree; other threads keep their relatives here.
+  const showLineage = visible.lineage && !(orchestratorMode && root?.agentRole === "orchestrator");
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const fileScripts = useT3ProjectFileScripts(
     props.environmentId,
