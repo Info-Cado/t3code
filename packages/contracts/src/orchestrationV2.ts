@@ -441,11 +441,27 @@ const LenientThreadOpens = Schema.NullOr(OrchestrationV2ThreadOpens).pipe(
   Schema.catchDecoding(() => Effect.succeedSome(null)),
 );
 
+/**
+ * An orchestrator runs one project: it reads, plans, and hands all work to delegated agents. It
+ * changes no files itself. Set when the thread is created and never changed.
+ */
+export const OrchestrationV2AgentRole = Schema.Literal("orchestrator");
+export type OrchestrationV2AgentRole = typeof OrchestrationV2AgentRole.Type;
+
+/**
+ * Providers whose read-only sandbox blocks file changes while T3's tools keep working. On others
+ * only its instructions keep an orchestrator from editing, so clients say so.
+ */
+export function orchestratorCannotEdit(driver: string): boolean {
+  return driver === "claudeAgent" || driver === "codex";
+}
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
+  agentRole: Schema.optional(OrchestrationV2AgentRole),
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -2074,6 +2090,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
   title: Schema.String,
+  agentRole: Schema.optional(OrchestrationV2AgentRole),
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -2901,6 +2918,8 @@ export const OrchestrationV2Command = Schema.Union([
     /**
      * False when the caller stops the thread's delegated tasks itself, as the server's tree walks
      * do under their caller's dispatch limit. Otherwise Stop also stops every task under the thread.
+     * An orchestrator's agents are the project's running work, so there only true stops them;
+     * otherwise Stop ends its current turn, and its agents go on and still report back.
      */
     stopDelegatedTasks: Schema.optional(Schema.Boolean),
   }),
@@ -2916,6 +2935,7 @@ export const OrchestrationV2Command = Schema.Union([
     interactionMode: ProviderInteractionMode,
     branch: Schema.NullOr(TrimmedNonEmptyString),
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+    agentRole: Schema.optional(OrchestrationV2AgentRole),
     /** Only the server sets this; a client's thread.create never carries one. */
     linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
     /** Only the server sets this, with `linkOrigin`, for a linked environment's delegated task. */
@@ -3230,6 +3250,8 @@ export const OrchestrationV2Command = Schema.Union([
     runId: RunId,
     reason: Schema.optional(Schema.String),
     holdQueue: Schema.optional(Schema.Boolean),
+    /** Ends this turn only: delegated tasks still report back and pull request watches stay. */
+    keepDelegatedWork: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("queued-message.promote-to-steer"),

@@ -27,6 +27,7 @@ import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes
 import {
   assertFullAccess,
   assertLiveCaller,
+  assertOrchestratorOwnsTarget,
   assertTargetWithinLimits,
   type Caller,
   loadCaller,
@@ -189,6 +190,7 @@ export const writesThreads = <P, A, E, R>(
           if (target !== null && target.deletedAt === null) {
             yield* assertTargetWithinLimits(caller.limits, target);
             yield* assertSameLink(caller, target);
+            yield* assertOrchestratorOwnsTarget(caller, target);
           }
         }
         // Modes can rise after this check; the orchestrator rechecks under lock and records refusal before handlers wrap errors.

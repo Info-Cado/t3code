@@ -2819,6 +2819,25 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         threadId: command.threadId,
       });
     }
+    if (command.agentRole === "orchestrator") {
+      const live = yield* projectionStore
+        .findLiveOrchestratorThreadId({
+          projectId: command.projectId,
+          requestedBy: command.threadId,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (live !== null) {
+        return yield* new OrchestratorCommandRejectedError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Project ${command.projectId} already has an orchestrator: ${live}.`,
+        });
+      }
+    }
 
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
@@ -2828,6 +2847,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       id: command.threadId,
       projectId: command.projectId,
       title: command.title,
+      // It runs for as long as the project does, so it never settles by itself.
+      ...(command.agentRole === undefined
+        ? {}
+        : { agentRole: command.agentRole, autoSettleDisabledAt: now }),
       providerInstanceId: command.modelSelection.instanceId,
       modelSelection: command.modelSelection,
       runtimeMode: command.runtimeMode,
@@ -5646,6 +5669,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       userMessages.length > 0 && userMessages.every(isNativeMaintenanceCommand);
     if (
       !isNativeMaintenanceCommand(command) &&
+      projection.thread.agentRole === undefined &&
       ((command.titleSeed !== undefined &&
         (yield* projectionStore
           .getMessageCount(command.threadId)
@@ -8034,6 +8058,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         subagentIds: child.forkedFrom?.type === "node" ? [child.forkedFrom.nodeId] : [],
       })
       .pipe(mapDispatchError(command));
+    // The user took this on themselves. The orchestrator hears of it at its next turn, not now.
+    if (parent.thread.agentRole === "orchestrator" && command.createdBy === "user") return;
     const original = parent.subagents.find(
       (task) =>
         task.origin === "app_owned" &&
@@ -11363,26 +11389,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
     const completionCohortRunId = completionMessage?.delegatedCompletion?.parentRunId ?? run.id;
     const stopRemainingWork = () =>
-      command.holdQueue === true
-        ? holdStoppedThread({
-            command,
-            events,
-            projection,
-            cohortRunIds: [completionCohortRunId],
-            now,
-          })
-        : Effect.gen(function* () {
-            for (const parentRunId of new Set([completionCohortRunId, run.id])) {
-              yield* disposeDelegatedCompletionCohort({
-                command,
-                events,
-                projection: yield* getProjectionWithPendingEvents(command.threadId, events),
-                parentRunId,
-                disposition: "stopped",
-                now,
-              });
-            }
-          });
+      command.keepDelegatedWork === true
+        ? Effect.void
+        : command.holdQueue === true
+          ? holdStoppedThread({
+              command,
+              events,
+              projection,
+              cohortRunIds: [completionCohortRunId],
+              now,
+            })
+          : Effect.gen(function* () {
+              for (const parentRunId of new Set([completionCohortRunId, run.id])) {
+                yield* disposeDelegatedCompletionCohort({
+                  command,
+                  events,
+                  projection: yield* getProjectionWithPendingEvents(command.threadId, events),
+                  parentRunId,
+                  disposition: "stopped",
+                  now,
+                });
+              }
+            });
 
     const emitEvent = emit(events, command);
     const interruptRequestItem: OrchestrationV2TurnItem = {
@@ -11922,6 +11950,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
     if (projection.thread.deletedAt !== null) return undefined;
+    if (projection.thread.agentRole === "orchestrator" && command.stopDelegatedTasks !== true) {
+      const turn = projection.runs.findLast(
+        (run) =>
+          run.status === "preparing" || run.status === "starting" || run.status === "running",
+      );
+      return turn === undefined
+        ? undefined
+        : yield* dispatchRunInterrupt(
+            {
+              type: "run.interrupt",
+              commandId: command.commandId,
+              threadId: command.threadId,
+              runId: turn.id,
+              keepDelegatedWork: true,
+              ...(command.reason === undefined ? {} : { reason: command.reason }),
+            },
+            events,
+            effects,
+          );
+    }
     // Queued after the interrupt, since a thread's effects run in order.
     const stopDelegatedTasks =
       command.stopDelegatedTasks === false ||

@@ -72,6 +72,21 @@ export interface Caller {
   readonly limits: CallerLimits;
 }
 
+/** Threads outside an orchestrator's own agents are the user's: it may read them, not change them. */
+export const assertOrchestratorOwnsTarget = (
+  caller: Pick<Caller, "caller">,
+  target: Pick<OrchestrationV2ThreadShell, "lineage">,
+) =>
+  caller.caller?.agentRole === "orchestrator" && target.lineage.rootThreadId !== caller.caller.id
+    ? Effect.fail(
+        new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message:
+            "This thread is the user's own. You can read it, but only the user can write to it.",
+        }),
+      )
+    : Effect.void;
+
 export const readCaller = Effect.fn("mcp.readCaller")(function* () {
   const scope = yield* McpInvocationContext.McpInvocationContext;
   if (!scope.capabilities.has("orchestration")) {

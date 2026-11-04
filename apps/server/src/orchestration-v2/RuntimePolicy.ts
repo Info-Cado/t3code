@@ -2,6 +2,7 @@ import {
   isRuntimeModeAbove,
   managedRuntimeModeCeilingMessage,
   ModelSelection,
+  orchestratorCannotEdit,
   OrchestrationV2AppThread,
   ProjectId,
   ProviderInstanceId,
@@ -18,6 +19,9 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+
+/** Reads anywhere, writes nowhere. */
+const ORCHESTRATOR_SANDBOX_POLICY = { type: "readOnly", access: { type: "fullAccess" } } as const;
 
 export class RuntimePolicyResolveError extends Schema.TaggedError<RuntimePolicyResolveError>()(
   "RuntimePolicyResolveError",
@@ -189,6 +193,12 @@ export const layerFromProjectStore: Layer.Layer<
           interactionMode: input.thread.interactionMode,
           cwd,
           ...(maxRuntimeMode === undefined ? {} : { maxRuntimeMode }),
+          // A sandbox, not a narrower mode: modes cap what the thread's children may do.
+          ...(input.thread.agentRole === "orchestrator" &&
+          instance !== undefined &&
+          orchestratorCannotEdit(instance.driverKind)
+            ? { sandboxPolicy: ORCHESTRATOR_SANDBOX_POLICY, orchestrator: true }
+            : {}),
         });
       }),
     });

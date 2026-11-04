@@ -11,6 +11,7 @@ import {
   MessageId,
   type ModelSelection,
   type NodeId,
+  type OrchestrationV2AgentRole,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
   type PlanId,
@@ -78,6 +79,7 @@ export interface CreateThreadInput extends CommandMetadata {
   readonly interactionMode: ProviderInteractionMode;
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  readonly agentRole?: OrchestrationV2AgentRole;
 }
 
 export interface ThreadCommandInput extends CommandMetadata {
@@ -189,6 +191,8 @@ export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
   readonly subagentId?: NodeId;
   readonly turnId?: string;
+  /** Stop all: an orchestrator's agents otherwise go on when it stops. */
+  readonly stopAgents?: boolean;
 }
 
 export interface RespondToThreadApprovalInput extends ThreadCommandInput {
@@ -409,6 +413,7 @@ export const createThread = Effect.fn("EnvironmentCommands.createThread")(functi
     interactionMode: input.interactionMode,
     branch: input.branch,
     worktreePath: input.worktreePath,
+    ...(input.agentRole === undefined ? {} : { agentRole: input.agentRole }),
   });
 });
 
@@ -823,6 +828,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
         type: "thread.stop",
         commandId: yield* allocateCommandId(input),
         threadId,
+        ...(input.stopAgents === true ? { stopDelegatedTasks: true } : {}),
       });
     }
   }

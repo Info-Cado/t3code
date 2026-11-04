@@ -93,6 +93,8 @@ export function makeSubagentChildThread(input: {
     pinnedAt: null,
     pinOrderKey: null,
     autoSettleDisabledAt: null,
+    // The role is the parent's own; its agents do the work it may not.
+    agentRole: undefined,
     // A guest link belongs to the thread it was made for.
     guestShare: null,
     lastVisitedAt: null,

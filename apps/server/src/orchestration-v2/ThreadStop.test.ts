@@ -607,6 +607,134 @@ it.effect.each(["run.interrupt", "thread.stop"] as const)(
     }).pipe(Effect.provide(layerTest)),
 );
 
+const createOrchestratorWithAgent = (threadId: ThreadId) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make(`create:${threadId}`),
+      threadId,
+      projectId: ProjectId.make(`project:${threadId}`),
+      title: "Orchestrator",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      agentRole: "orchestrator",
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* watch(threadId, 1);
+    yield* send(threadId, "fix it", "start_immediately");
+    return yield* delegate(threadId, `task of ${threadId}`);
+  });
+
+const agentStopWalks = (commandId: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql<{ readonly command_id: string }>`
+      SELECT command_id FROM orchestration_v2_effect_outbox
+      WHERE effect_type = 'delegated-tasks.stop' AND command_id = ${commandId}
+    `;
+  });
+
+it.effect("Stop on an orchestrator ends its turn; its agents and watches go on", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make("thread:orchestrator-stop");
+    const agentThreadId = yield* createOrchestratorWithAgent(threadId);
+    const agentRunsBefore = (yield* threadState(agentThreadId)).runs;
+
+    yield* orchestrator.dispatch({
+      type: "thread.stop",
+      commandId: CommandId.make("stop-orchestrator"),
+      threadId,
+    });
+
+    assert.deepEqual(yield* threadState(threadId), { runs: ["interrupted"], watched: [1] });
+    // Its agents are ordinary threads: they edit files, and the role would stop them.
+    const agent = yield* orchestrator.getThreadProjection(agentThreadId);
+    assert.isUndefined(agent.thread.agentRole);
+    const projection = yield* orchestrator.getThreadProjection(threadId);
+    assert.notEqual(projection.subagents[0]?.completionDelivery?.state, "disposed");
+    assert.notEqual(projection.runs[0]?.delegatedCompletion?.disposition, "stopped");
+    assert.lengthOf(yield* agentStopWalks("stop-orchestrator"), 0);
+    assert.deepEqual((yield* threadState(agentThreadId)).runs, agentRunsBefore);
+
+    // Nothing is running now, so a second Stop has nothing to end.
+    const again = yield* orchestrator.dispatch({
+      type: "thread.stop",
+      commandId: CommandId.make("stop-orchestrator-again"),
+      threadId,
+    });
+    assert.lengthOf(again.storedEvents, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("Stop all on an orchestrator stops its agents too", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make("thread:orchestrator-stop-all");
+    yield* createOrchestratorWithAgent(threadId);
+
+    yield* orchestrator.dispatch({
+      type: "thread.stop",
+      commandId: CommandId.make("stop-all"),
+      threadId,
+      stopDelegatedTasks: true,
+    });
+
+    assert.deepEqual(yield* threadState(threadId), { runs: ["interrupted"], watched: [] });
+    const projection = yield* orchestrator.getThreadProjection(threadId);
+    assert.equal(projection.subagents[0]?.completionDelivery?.state, "disposed");
+    assert.lengthOf(yield* agentStopWalks("stop-all"), 1);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("a project has one live orchestrator, and archiving it frees the place", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projectId = ProjectId.make("project:one-orchestrator");
+    const create = (id: string, agentRole?: "orchestrator") =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:${id}`),
+        threadId: ThreadId.make(id),
+        projectId,
+        title: id,
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        ...(agentRole === undefined ? {} : { agentRole }),
+        createdBy: "user",
+        creationSource: "web",
+      });
+    yield* create("thread:first", "orchestrator");
+    yield* create("thread:users-own");
+    const first = yield* orchestrator.getThreadProjection(ThreadId.make("thread:first"));
+    assert.equal(first.thread.agentRole, "orchestrator");
+    // It runs as long as the project does.
+    assert.isNotNull(first.thread.autoSettleDisabledAt ?? null);
+    const usersOwn = yield* orchestrator.getThreadProjection(ThreadId.make("thread:users-own"));
+    assert.isUndefined(usersOwn.thread.agentRole);
+
+    const second = yield* Effect.exit(create("thread:second", "orchestrator"));
+    assert.isTrue(Exit.isFailure(second));
+
+    yield* orchestrator.dispatch({
+      type: "thread.archive",
+      commandId: CommandId.make("archive:first"),
+      threadId: ThreadId.make("thread:first"),
+    });
+    yield* create("thread:third", "orchestrator");
+    const third = yield* orchestrator.getThreadProjection(ThreadId.make("thread:third"));
+    assert.equal(third.thread.agentRole, "orchestrator");
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("a repeated Stop that changes nothing still stops the delegated tasks", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;

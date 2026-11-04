@@ -545,6 +545,29 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.isFalse(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD));
   });
 
+  it("gives an orchestrator no way to edit or start native subagents, and all of T3's tools", () => {
+    const threadId = ThreadId.make("thread-claude-orchestrator");
+    const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
+      ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: "/workspace",
+        sandboxPolicy: { type: "readOnly", access: { type: "fullAccess" } },
+        orchestrator: true,
+      }),
+    );
+
+    assert.deepEqual(queryPolicy.tools, ["Read", "Glob", "Grep", "ToolSearch"]);
+    assert.deepEqual(queryPolicy.allowedTools, ["Read", "Glob", "Grep", "ToolSearch"]);
+    assert.equal(queryPolicy.permissionMode, "dontAsk");
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: mcpSessionFor(threadId),
+      readOnlySandbox: false,
+      ...(queryPolicy.allowedTools === undefined ? {} : { allowedTools: queryPolicy.allowedTools }),
+    });
+    assert.isTrue(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD));
+  });
+
   it("invalidates live-query reuse when MCP credentials rotate", () => {
     const threadId = ThreadId.make("thread-claude-mcp-credential-rotation");
     const mcpSession = mcpSessionFor(threadId);

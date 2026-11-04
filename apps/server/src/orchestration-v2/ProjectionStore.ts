@@ -466,6 +466,20 @@ export interface ProjectionStoreV2Shape {
   readonly listAppOwnedChildThreadIds: (
     threadId: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionStoreV2Error>;
+  /** The project's orchestrator, unless it was archived or deleted. */
+  readonly findLiveOrchestratorThreadId: (input: {
+    readonly projectId: ProjectId;
+    readonly requestedBy: ThreadId;
+  }) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
+  /** What the user typed to the thread's delegated agents since a time, newest first. */
+  readonly listUserMessagesInChildThreads: (input: {
+    readonly threadId: ThreadId;
+    readonly since: string;
+    readonly limit: number;
+  }) => Effect.Effect<
+    ReadonlyArray<{ readonly threadId: ThreadId; readonly text: string }>,
+    ProjectionStoreV2Error
+  >;
   readonly getNextTurnItemOrdinal: (
     threadId: ThreadId,
   ) => Effect.Effect<number, ProjectionStoreV2Error>;
@@ -1673,7 +1687,9 @@ export function threadShellFromProjection(
     snoozedUntil: projection.thread.snoozedUntil ?? null,
     snoozedAt: projection.thread.snoozedAt ?? null,
     pinnedAt: projection.thread.pinnedAt ?? null,
-
+    ...(projection.thread.agentRole === undefined
+      ? {}
+      : { agentRole: projection.thread.agentRole }),
     autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: projection.thread.pinOrderKey ?? null,
     ...(projection.thread.tags?.length ? { tags: projection.thread.tags } : {}),
@@ -1939,7 +1955,9 @@ function shellFromState(input: {
     snoozedUntil: input.state.thread.snoozedUntil ?? null,
     snoozedAt: input.state.thread.snoozedAt ?? null,
     pinnedAt: input.state.thread.pinnedAt ?? null,
-
+    ...(input.state.thread.agentRole === undefined
+      ? {}
+      : { agentRole: input.state.thread.agentRole }),
     autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
     ...(input.state.thread.tags?.length ? { tags: input.state.thread.tags } : {}),
@@ -5497,6 +5515,40 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.map((rows) => [...new Set(rows.map((row) => ThreadId.make(row.child_thread_id)))]),
         Effect.mapError(controlReadError(threadId)),
       );
+    const findLiveOrchestratorThreadId: ProjectionStoreV2Shape["findLiveOrchestratorThreadId"] = (
+      input,
+    ) =>
+      sql<{ readonly thread_id: string }>`SELECT thread_id
+        FROM orchestration_v2_projection_threads
+        WHERE project_id = ${input.projectId}
+          AND archived_at IS NULL
+          AND deleted_at IS NULL
+          AND json_extract(payload_json, '$.agentRole') = 'orchestrator'
+        LIMIT 1`.pipe(
+        Effect.map((rows) => (rows[0] === undefined ? null : ThreadId.make(rows[0].thread_id))),
+        Effect.mapError(controlReadError(input.requestedBy)),
+      );
+    const listUserMessagesInChildThreads: ProjectionStoreV2Shape["listUserMessagesInChildThreads"] =
+      (input) =>
+        sql<{ readonly thread_id: string; readonly text: string }>`SELECT DISTINCT
+            m.message_id,
+            m.thread_id,
+            m.created_at,
+            json_extract(m.payload_json, '$.text') AS text
+          FROM orchestration_v2_projection_subagents s
+          JOIN orchestration_v2_projection_messages m ON m.thread_id = s.child_thread_id
+          WHERE s.thread_id = ${input.threadId}
+            AND s.origin = 'app_owned'
+            AND m.role = 'user'
+            AND m.created_at > ${input.since}
+            AND json_extract(m.payload_json, '$.createdBy') = 'user'
+          ORDER BY m.created_at DESC
+          LIMIT ${input.limit}`.pipe(
+          Effect.map((rows) =>
+            rows.map((row) => ({ threadId: ThreadId.make(row.thread_id), text: row.text })),
+          ),
+          Effect.mapError(controlReadError(input.threadId)),
+        );
     const getNextTurnItemOrdinal: ProjectionStoreV2Shape["getNextTurnItemOrdinal"] = (threadId) =>
       sql<{ ordinal: number | null }>`SELECT MAX(ordinal) AS ordinal
         FROM orchestration_v2_projection_turn_items WHERE thread_id = ${threadId}`.pipe(
@@ -7407,6 +7459,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getMessageCount: readOnReader(getMessageCount),
       getSubagentCount: readOnReader(getSubagentCount),
       listAppOwnedChildThreadIds: readOnReader(listAppOwnedChildThreadIds),
+      findLiveOrchestratorThreadId: readOnReader(findLiveOrchestratorThreadId),
+      listUserMessagesInChildThreads: readOnReader(listUserMessagesInChildThreads),
       getNextTurnItemOrdinal: readOnReader(getNextTurnItemOrdinal),
       getTurnItem: readOnReader(getTurnItem),
       getMessagesById: readOnReader(getMessagesById),

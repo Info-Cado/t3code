@@ -48,4 +48,40 @@ describe("queued run delivery order", () => {
       "run:visible-second",
     ]);
   });
+
+  it("puts what the user types ahead of agent reports on an orchestrator only", () => {
+    const projection = {
+      messages: [
+        {
+          id: "message:report",
+          createdBy: "agent",
+          creationSource: "server",
+          delegatedCompletion: {
+            generation: 1,
+            parentRunId: "run:parent",
+            taskIds: ["task:child"],
+          },
+        },
+        { id: "message:agent", createdBy: "agent", creationSource: "mcp" },
+        { id: "message:phone", createdBy: "user", creationSource: "mobile" },
+        { id: "message:web", createdBy: "user", creationSource: "web" },
+      ],
+      runs: [
+        { id: "run:report", ordinal: 1, status: "queued", userMessageId: "message:report" },
+        { id: "run:agent", ordinal: 2, status: "queued", userMessageId: "message:agent" },
+        { id: "run:phone", ordinal: 3, status: "queued", userMessageId: "message:phone" },
+        { id: "run:web", ordinal: 4, status: "queued", userMessageId: "message:web" },
+      ],
+    };
+
+    expect(
+      queuedRunsInDeliveryOrder({
+        ...projection,
+        thread: { agentRole: "orchestrator" },
+      } as never).map((run) => run.id),
+    ).toEqual(["run:phone", "run:web", "run:report", "run:agent"]);
+    expect(
+      queuedRunsInDeliveryOrder({ ...projection, thread: {} } as never).map((run) => run.id),
+    ).toEqual(["run:report", "run:agent", "run:phone", "run:web"]);
+  });
 });

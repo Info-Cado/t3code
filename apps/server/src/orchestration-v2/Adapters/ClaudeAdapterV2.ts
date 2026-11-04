@@ -503,6 +503,11 @@ export interface ClaudeAgentSdkQueryPresetTools {
 export type ClaudeAgentSdkQueryTools = ClaudeAgentSdkQueryToolList | ClaudeAgentSdkQueryPresetTools;
 
 export const CLAUDE_READ_ONLY_ALLOWED_TOOLS = ["Read", "Glob", "Grep"] as const;
+/** No Agent tool: its children could not take the user's messages. */
+const CLAUDE_ORCHESTRATOR_ALLOWED_TOOLS = [
+  ...CLAUDE_READ_ONLY_ALLOWED_TOOLS,
+  "ToolSearch",
+] as const;
 
 function claudeAgentSdkQueryToolsForSdk(
   tools: ClaudeAgentSdkQueryTools,
@@ -2872,7 +2877,9 @@ export function claudeRuntimeQueryPolicyForRuntimePolicy(
     : requestedMode;
   const readOnlyTools =
     sandboxPolicyKindForClaudeRuntimePolicy(runtimePolicy) === "readOnly"
-      ? CLAUDE_READ_ONLY_ALLOWED_TOOLS
+      ? runtimePolicy.orchestrator === true
+        ? CLAUDE_ORCHESTRATOR_ALLOWED_TOOLS
+        : CLAUDE_READ_ONLY_ALLOWED_TOOLS
       : undefined;
   const allowedTools =
     readOnlyTools !== undefined && readOnlyPolicyAllowsGlobalReads(runtimePolicy)
@@ -10723,7 +10730,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const mcpOverrides = claudeMcpQueryOverrides({
             mcpSession,
             readOnlySandbox:
-              sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
+              sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly" &&
+              turnInput.runtimePolicy.orchestrator !== true,
             ...(queryPolicy.allowedTools === undefined
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),

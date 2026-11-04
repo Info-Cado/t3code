@@ -29,6 +29,8 @@ export interface McpThreadCaller {
   readonly providerInstanceId: ProviderInstanceId;
   /** A delegated child task; its parent owns the work it hands back. */
   readonly subagent?: boolean;
+  /** Runs a project through its own agents, so it starts no top-level threads. */
+  readonly orchestrator?: boolean;
 }
 
 export interface McpClientCaller {
@@ -159,6 +161,13 @@ export const hiddenFromSubagents = (): boolean => {
   const fiber = Fiber.getCurrent();
   const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
   return scope?.thread?.subagent !== true;
+};
+
+/** `McpSchema.EnabledWhen` for tools that start top-level threads, which are the user's own. */
+export const hiddenFromOrchestrators = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.thread?.orchestrator !== true;
 };
 
 /** `McpSchema.EnabledWhen` for tools that only serve links, hidden while the beta is off. */

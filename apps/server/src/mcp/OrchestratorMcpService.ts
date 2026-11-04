@@ -2375,6 +2375,8 @@ const make = Effect.gen(function* () {
           : readTask(scope, taskId, false, true);
       }
       const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
+      // Its turn ends while agents work; each one wakes it, so nothing blocks the user's next message.
+      const mode = parent.thread.agentRole === "orchestrator" ? "async" : input.mode;
       if (
         input.target?.projectId !== undefined &&
         input.target.projectId !== parent.thread.projectId
@@ -2471,7 +2473,7 @@ const make = Effect.gen(function* () {
           // Async delegations wake the parent on every child terminal; wait
           // delegations deliver through the blocking tool call, so a wake is
           // only needed if the parent settled first (timeout, disconnect).
-          completionWake: input.mode === "wait" ? "settled_only" : "always",
+          completionWake: mode === "wait" ? "settled_only" : "always",
         })
         .pipe(
           Effect.mapError((error) =>
@@ -2510,7 +2512,7 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (input.mode !== "wait") {
+      if (mode !== "wait") {
         return yield* readTask(scope, taskId, false, true);
       }
       const timeoutMs = Math.min(

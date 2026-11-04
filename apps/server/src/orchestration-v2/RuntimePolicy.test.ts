@@ -71,12 +71,13 @@ const supportedRuntimeModesByInstance = new Map<ProviderInstanceId, ReadonlyArra
 ]);
 const providerInstanceFor = (instanceId: ProviderInstanceId) =>
   ({
+    driverKind: instanceId,
     snapshot: {
       getSnapshot: Effect.succeed({
         supportedRuntimeModes: supportedRuntimeModesByInstance.get(instanceId),
       } as ServerProvider),
     },
-  }) as ProviderInstance;
+  }) as unknown as ProviderInstance;
 
 const layerWithPolicy = (policy?: ManagedPolicySummary) =>
   RuntimePolicy.layerFromProjectStore.pipe(
@@ -116,6 +117,33 @@ const layerWithPolicy = (policy?: ManagedPolicySummary) =>
 const layerTest = layerWithPolicy();
 
 it.layer(layerTest)("RuntimePolicyV2", (it) => {
+  it.effect("keeps an orchestrator from editing without narrowing what its agents may do", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicy.RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const resolve = (instanceId: string, agentRole?: "orchestrator") =>
+        policy.resolve({
+          thread: {
+            ...makeThread({ now, worktreePath: null, runtimeMode: "full-access" }),
+            ...(agentRole === undefined ? {} : { agentRole }),
+          },
+          modelSelection: { instanceId: ProviderInstanceId.make(instanceId), model: "test-model" },
+        });
+      for (const driver of ["claudeAgent", "codex"]) {
+        const orchestrator = yield* resolve(driver, "orchestrator");
+        assert.equal(orchestrator.runtimeMode, "full-access");
+        assert.deepEqual(orchestrator.sandboxPolicy, {
+          type: "readOnly",
+          access: { type: "fullAccess" },
+        });
+        assert.isTrue(orchestrator.orchestrator);
+        assert.isUndefined((yield* resolve(driver)).sandboxPolicy);
+      }
+      // These sandboxes would also close T3's tools, so its instructions have to do.
+      assert.isUndefined((yield* resolve("grok", "orchestrator")).sandboxPolicy);
+    }),
+  );
+
   it.effect("asks for Antigravity command approval when a stored Auto thread falls back", () =>
     Effect.gen(function* () {
       const policy = yield* RuntimePolicy.RuntimePolicyV2;

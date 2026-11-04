@@ -46,6 +46,7 @@ import {
   latestNativeContextUsage,
 } from "@t3tools/provider-core/server/handoffBudget";
 import { deliverContextHandoffs, withInlineContext } from "./ContextHandoffDelivery.ts";
+import { previousTurnStart, withOrchestratorTurnContext } from "./orchestratorTurnContext.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -843,13 +844,21 @@ export const layer: Layer.Layer<
       });
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
-      const userText = projectComposerContextForProvider({
+      const composedText = projectComposerContextForProvider({
         text: message.text,
         records: message.context?.records ?? [],
       });
       // Codex and Claude parse /goal from the prompt, so it goes verbatim and history waits a turn.
       const goalDriver = session.driver === "codex" || session.driver === "claudeAgent";
       const goalCommand = goalDriver && parseGoalCommand(message) !== null;
+      const userText =
+        projection.thread.agentRole === "orchestrator" && !goalCommand
+          ? yield* withOrchestratorTurnContext(composedText, {
+              store: projectionStore,
+              threadId: input.threadId,
+              since: previousTurnStart(projection.runs, runId),
+            })
+          : composedText;
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
       const noteContinuation = isRestartNoteContinuation(
         run,

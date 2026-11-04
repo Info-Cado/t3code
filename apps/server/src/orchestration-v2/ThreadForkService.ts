@@ -134,6 +134,8 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
         snoozedUntil: null,
         snoozedAt: null,
         lastSnoozeWakeAt: null,
+        // A project has one orchestrator; its fork is an ordinary thread.
+        agentRole: undefined,
         pinnedAt: null,
         pinOrderKey: null,
         activeOrderKey: null,

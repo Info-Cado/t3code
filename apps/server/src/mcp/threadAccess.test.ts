@@ -6,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
-import { readThread } from "./threadAccess.ts";
+import { assertOrchestratorOwnsTarget, readThread } from "./threadAccess.ts";
 
 const bareId = ThreadId.make("5d0b4a3e-8c1f-4a52-9d37-2f6c7e1b9a04");
 const client: McpInvocationContext.McpInvocationScope = {
@@ -29,6 +29,30 @@ const readBare = (existing: ReadonlyArray<ThreadId>) =>
       }),
     ),
   );
+
+it.effect("keeps an orchestrator to its own agents; other callers are not limited", () =>
+  Effect.gen(function* () {
+    const shell = liveThreadShell(ThreadId.make("thread:orchestrator"));
+    const orchestrator = { caller: { ...shell, agentRole: "orchestrator" as const } };
+    const lineage = (rootThreadId: string) => ({
+      lineage: {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: ThreadId.make(rootThreadId),
+      },
+    });
+
+    yield* assertOrchestratorOwnsTarget(orchestrator, lineage("thread:orchestrator"));
+    yield* assertOrchestratorOwnsTarget({ caller: shell }, lineage("thread:users-own"));
+    yield* assertOrchestratorOwnsTarget({ caller: undefined }, lineage("thread:users-own"));
+    const refused = yield* assertOrchestratorOwnsTarget(
+      orchestrator,
+      lineage("thread:users-own"),
+    ).pipe(Effect.flip);
+
+    expect(refused.code).toBe("capability_denied");
+  }),
+);
 
 it.effect("points a bare uuid at the mcp: thread it belongs to", () =>
   Effect.gen(function* () {
