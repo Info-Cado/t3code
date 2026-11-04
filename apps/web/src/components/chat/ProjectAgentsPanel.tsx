@@ -24,7 +24,7 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { RightPanelSheet } from "../RightPanelSheet";
-import { resolveSidebarThreadStatus } from "../Sidebar.logic";
+import { resolveSidebarThreadStatus, threadStillWorks } from "../Sidebar.logic";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
@@ -120,7 +120,8 @@ function ProjectAgents(props: {
       (thread) =>
         thread.lineage.relationshipToParent === "subagent" &&
         thread.lineage.parentThreadId === orchestrator.id &&
-        !["ready", "failed", "limited"].includes(resolveSidebarThreadStatus(thread)),
+        (threadStillWorks(thread) ||
+          ["approval", "input", "request"].includes(resolveSidebarThreadStatus(thread))),
     );
   const providers = useEnvironmentProviders().get(environmentId);
   const driver = providers?.find(

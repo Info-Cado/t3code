@@ -938,6 +938,12 @@ export function resolveSidebarFolderDot(
   return null;
 }
 
+/** Running, or blocked on other work. A session that merely idles has finished. */
+export function threadStillWorks(thread: SidebarThreadStatusInput): boolean {
+  const status = resolveSidebarThreadStatus(thread);
+  return status === "working" || (status === "waiting" && thread.runtime?.status === "running");
+}
+
 /**
  * One project's state in orchestrator mode: what its own threads need from the user, or that its
  * agents still work. An agent's result goes to the orchestrator, so it needs nothing from the user
@@ -953,9 +959,7 @@ export function resolveSidebarProjectStatus(
   );
   if (own === "attention" || own === "failed") return own;
   // Done would be untrue while an agent still works, even after the orchestrator has replied.
-  return threads.some((thread) => resolveSidebarThreadStatus(thread) === "working")
-    ? "working"
-    : own;
+  return threads.some(threadStillWorks) ? "working" : own;
 }
 
 /** Projects that need the user come first; the rest keep the user's order. */

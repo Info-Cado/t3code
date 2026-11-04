@@ -1653,6 +1653,13 @@ describe("resolveSidebarProjectStatus", () => {
     expect(resolveSidebarProjectStatus([replied, { ...agent, runtime }])).toBe("working");
   });
 
+  it("counts an agent blocked on other work, but not one whose session idles", () => {
+    const blocked = { ...agent, runtime, blockedOnThreadWait: true };
+    expect(resolveSidebarProjectStatus([idle, blocked])).toBe("working");
+    const idling = { ...agent, runtime: { ...runtime, status: "idle" as const } };
+    expect(resolveSidebarProjectStatus([idle, idling])).toBeNull();
+  });
+
   it("leaves an agent's result and failure to the orchestrator", () => {
     const failed = { ...runtime, status: "failed" as const };
     const unread = { lastVisitedAt: "2026-03-09T10:04:00.000Z" };
