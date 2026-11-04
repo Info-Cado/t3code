@@ -672,6 +672,28 @@ it.effect("Stop on an orchestrator ends its turn; its agents and watches go on",
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("a Stop that names the run, as mobile sends it, keeps an orchestrator's agents too", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make("thread:orchestrator-stop-run");
+    yield* createOrchestratorWithAgent(threadId);
+    const run = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+
+    yield* orchestrator.dispatch({
+      type: "run.interrupt",
+      commandId: CommandId.make("stop-orchestrator-run"),
+      threadId,
+      runId: run.id,
+      holdQueue: true,
+    });
+
+    const projection = yield* orchestrator.getThreadProjection(threadId);
+    assert.notEqual(projection.subagents[0]?.completionDelivery?.state, "disposed");
+    assert.notEqual(projection.runs[0]?.delegatedCompletion?.disposition, "stopped");
+    assert.deepEqual((yield* threadState(threadId)).watched, [1]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("Stop all on an orchestrator stops its agents too", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -798,6 +820,33 @@ it.effect("a project has one live orchestrator, and archiving it frees the place
       commandId: CommandId.make("unarchive:first:again"),
       threadId: ThreadId.make("thread:first"),
     });
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("two devices opening one project at once make one orchestrator", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const create = (device: string) =>
+      orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`create:race:${device}`),
+        threadId: ThreadId.make(`thread:race:${device}`),
+        projectId: ProjectId.make("project:race"),
+        title: "Orchestrator",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        agentRole: "orchestrator",
+        createdBy: "user",
+        creationSource: "web",
+      });
+    const results = yield* Effect.all(
+      ["laptop", "phone", "tablet"].map((device) => Effect.exit(create(device))),
+      { concurrency: "unbounded" },
+    );
+    assert.lengthOf(results.filter(Exit.isSuccess), 1);
   }).pipe(Effect.provide(layerTest)),
 );
 

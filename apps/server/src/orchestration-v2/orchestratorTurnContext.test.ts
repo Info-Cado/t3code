@@ -116,6 +116,13 @@ it.effect("sends the context ahead of the message and leaves native commands alo
       yield* withOrchestratorTurnContext("/compact", { store: store(), threadId, since }),
       "/compact",
     );
+    // A path is not a command, so the agent still gets its rules.
+    const path = yield* withOrchestratorTurnContext("/src/main.ts is broken", {
+      store: store(),
+      threadId,
+      since,
+    });
+    assert.isTrue(path.startsWith("<t3_orchestrator>"));
   }),
 );
 

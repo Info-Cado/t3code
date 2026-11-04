@@ -110,7 +110,7 @@ export const withOrchestratorTurnContext = Effect.fn("orchestrationV2.orchestrat
       readonly since: DateTime.Utc | null;
     },
   ) {
-    if (text.trimStart().startsWith("/")) return text;
+    if (/^\/[\w:-]+(?:\s|$)/u.test(text.trimStart())) return text;
     const { subagents } = yield* input.store.getThreadRecords(input.threadId, ["subagents"]);
     const notes =
       input.since === null

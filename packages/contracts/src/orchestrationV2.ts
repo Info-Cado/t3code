@@ -3250,7 +3250,10 @@ export const OrchestrationV2Command = Schema.Union([
     runId: RunId,
     reason: Schema.optional(Schema.String),
     holdQueue: Schema.optional(Schema.Boolean),
-    /** Ends this turn only: delegated tasks still report back and pull request watches stay. */
+    /**
+     * True ends this turn only: delegated tasks still report back and pull request watches stay.
+     * Defaults to true on an orchestrator, whose agents are the project's running work.
+     */
     keepDelegatedWork: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({

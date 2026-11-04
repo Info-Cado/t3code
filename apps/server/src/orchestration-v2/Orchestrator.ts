@@ -11399,8 +11399,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (candidate) => candidate.id === run.userMessageId,
     );
     const completionCohortRunId = completionMessage?.delegatedCompletion?.parentRunId ?? run.id;
+    // Every Stop reaches here, not only thread.stop: mobile names the run, and /goal interrupts.
     const stopRemainingWork = () =>
-      command.keepDelegatedWork === true
+      (command.keepDelegatedWork ?? projection.thread.agentRole === "orchestrator")
         ? Effect.void
         : command.holdQueue === true
           ? holdStoppedThread({
@@ -11999,7 +12000,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             threadId: command.threadId,
             runId: target.id,
-            ...(keepAgents ? { keepDelegatedWork: true } : { holdQueue: true }),
+            keepDelegatedWork: keepAgents,
+            ...(keepAgents ? {} : { holdQueue: true }),
             ...(command.reason === undefined ? {} : { reason: command.reason }),
           },
           interruptEvents,
@@ -13796,6 +13798,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       commandThreadId(command),
       dispatchWithReceiptEffect(command),
     );
+    // Two devices can open one project at once; the limit of one orchestrator spans thread locks.
+    const orchestratorProjectId =
+      command.type === "thread.create" && command.agentRole === "orchestrator"
+        ? command.projectId
+        : command.type === "thread.unarchive"
+          ? yield* findThread(command.threadId).pipe(
+              Effect.map((thread) =>
+                thread?.agentRole === "orchestrator" ? thread.projectId : undefined,
+              ),
+            )
+          : undefined;
+    if (orchestratorProjectId !== undefined) {
+      return yield* threadDispatch.withLock(
+        ThreadId.make(`orchestrator-project:${orchestratorProjectId}`),
+        dispatch,
+      );
+    }
     // A parent's lock comes before its side chats' locks, so a delete cascade and a side chat
     // fork or command never interleave. A fork from a side chat or onto an existing thread would
     // invert that order; dispatch rejects both, so they skip the source lock.
