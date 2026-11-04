@@ -2076,15 +2076,16 @@ const make = Effect.gen(function* () {
               : "bindToCurrentThread binds to this thread, which belongs to a different project.",
           );
         }
-        if (input.bindToCurrentThread !== undefined) {
-          yield* assertOrchestratorTaskStaysInThread(parent?.thread, input.bindToCurrentThread);
-        }
         const threadId =
           input.bindToCurrentThread === undefined
             ? existing.threadId
             : input.bindToCurrentThread && parent !== undefined
               ? parent.thread.id
               : null;
+        yield* assertOrchestratorTaskStaysInThread(
+          parent?.thread,
+          threadId !== null && threadId === parent?.thread.id,
+        );
         // Update workspace strategy on rebinding so unbound root tasks cannot run in the shared checkout.
         const workspaceStrategy =
           input.bindToCurrentThread === undefined
