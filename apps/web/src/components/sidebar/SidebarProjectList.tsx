@@ -38,7 +38,9 @@ export function SidebarProjectList(props: {
   const threadsByProject = new Map<string, EnvironmentThreadShell[]>();
   for (const thread of props.threads) {
     const key = `${thread.environmentId}:${thread.projectId}`;
-    threadsByProject.set(key, [...(threadsByProject.get(key) ?? []), thread]);
+    const list = threadsByProject.get(key);
+    if (list) list.push(thread);
+    else threadsByProject.set(key, [thread]);
   }
   const statusByGroup = new Map(
     props.groups.map((group) => [
