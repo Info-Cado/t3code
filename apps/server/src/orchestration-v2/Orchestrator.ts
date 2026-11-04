@@ -11399,10 +11399,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (candidate) => candidate.id === run.userMessageId,
     );
     const completionCohortRunId = completionMessage?.delegatedCompletion?.parentRunId ?? run.id;
+    // An orchestrator's agents are the project's running work, whichever way its run is stopped.
+    const keepDelegatedWork =
+      command.keepDelegatedWork ?? projection.thread.agentRole === "orchestrator";
+    const holdQueue = command.holdQueue === true && !keepDelegatedWork;
     const stopRemainingWork = () =>
-      command.keepDelegatedWork === true
+      keepDelegatedWork
         ? Effect.void
-        : command.holdQueue === true
+        : holdQueue
           ? holdStoppedThread({
               command,
               events,
@@ -11447,7 +11451,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     };
 
     const otherProviderInterrupts: Array<PendingOrchestrationEffectV2> = [];
-    if (hasBackgroundWork || command.holdQueue === true) {
+    if (hasBackgroundWork || holdQueue) {
       const runOrdinals = new Map(
         projection.runs.map((candidate) => [candidate.id, candidate.ordinal]),
       );
@@ -13350,15 +13354,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* dispatchSubagentStop(command, events, effects);
         break;
       case "run.interrupt": {
-        // Every way to stop a run comes through here: mobile names the run, and /goal interrupts.
+        cancelUnsettledEffects = yield* dispatchRunInterrupt(command, events, effects);
         const keepsAgents =
           command.keepDelegatedWork ??
           (yield* findThread(command.threadId))?.agentRole === "orchestrator";
-        const interrupt = keepsAgents
-          ? { ...command, keepDelegatedWork: true, holdQueue: false }
-          : command;
-        cancelUnsettledEffects = yield* dispatchRunInterrupt(interrupt, events, effects);
-        if (interrupt.holdQueue === true) {
+        if (command.holdQueue === true && !keepsAgents) {
           // Stop must still commit when a child can't be read, so a failed repair's
           // partial events are dropped.
           const repairEvents = yield* Ref.make(yield* Ref.get(events));

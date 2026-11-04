@@ -948,10 +948,14 @@ export function resolveSidebarProjectStatus(
     ThreadStatusInput & SidebarThreadStatusInput & Pick<SidebarThreadSummary, "lineage">
   >,
 ): ReturnType<typeof resolveSidebarFolderDot> {
-  return (
-    resolveSidebarFolderDot(threads.filter((thread) => isListedThreadLineage(thread.lineage))) ??
-    (threads.some((thread) => resolveSidebarThreadStatus(thread) === "working") ? "working" : null)
+  const own = resolveSidebarFolderDot(
+    threads.filter((thread) => isListedThreadLineage(thread.lineage)),
   );
+  if (own === "attention" || own === "failed") return own;
+  // Done would be untrue while an agent still works, even after the orchestrator has replied.
+  return threads.some((thread) => resolveSidebarThreadStatus(thread) === "working")
+    ? "working"
+    : own;
 }
 
 /** Projects that need the user come first; the rest keep the user's order. */

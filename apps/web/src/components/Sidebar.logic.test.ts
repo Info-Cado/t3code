@@ -1648,6 +1648,9 @@ describe("resolveSidebarProjectStatus", () => {
   it("says Working while only an agent runs, because its parent has ended its turn", () => {
     expect(resolveSidebarProjectStatus([idle, { ...agent, runtime }])).toBe("working");
     expect(resolveSidebarProjectStatus([idle, agent])).toBeNull();
+    // The orchestrator has replied and ended its turn, and its agent still works.
+    const replied = { ...idle, lastVisitedAt: "2026-03-09T10:04:00.000Z" };
+    expect(resolveSidebarProjectStatus([replied, { ...agent, runtime }])).toBe("working");
   });
 
   it("leaves an agent's result and failure to the orchestrator", () => {
