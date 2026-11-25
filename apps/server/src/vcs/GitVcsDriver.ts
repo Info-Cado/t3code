@@ -171,6 +171,8 @@ export interface CreateWorktreeOptions {
   readonly worktreesDirectory?: string;
   /** Clone the checkout from the macOS worktree checkout cache. */
   readonly fastCheckout?: boolean;
+  /** Name a new folder after this branch, not the one checked out (renamed to it later). */
+  readonly folderBranch?: string;
 }
 
 export interface GitCommitProgress {

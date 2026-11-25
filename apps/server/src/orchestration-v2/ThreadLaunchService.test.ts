@@ -1202,78 +1202,81 @@ const preparationSettled = (threadId: ThreadId) =>
   });
 
 it.effect.each([
-  { prefix: "my-prefix", collision: null, expected: /^my-prefix\/[0-9a-f]{8}$/ },
-  { prefix: "my-prefix", collision: "my-prefix", expected: /^my-prefix-[0-9a-f]{8}$/ },
-  { prefix: "team/topic", collision: "team", expected: /^team-topic-[0-9a-f]{8}$/ },
-])("keeps prefix '$prefix' with collision '$collision' when naming fails", (scenario) =>
-  Effect.gen(function* () {
-    const namingAttempted = yield* Deferred.make<void>();
-    const harness = makeHarness({
-      serverSettings: {
-        branchNamePrefix: "global-prefix",
-        projectSettingsOverrides: {
-          [projectId]: { branchNamingMode: "static", branchNamePrefix: scenario.prefix },
+  { prefix: "my-prefix", collision: null, temporary: /^my-prefix\/[0-9a-f]{8}$/ },
+  { prefix: "my-prefix", collision: "my-prefix", temporary: /^my-prefix-[0-9a-f]{8}$/ },
+  { prefix: "team/topic", collision: "team", temporary: /^team-topic-[0-9a-f]{8}$/ },
+])(
+  "names prefix '$prefix' with collision '$collision' after the message when naming fails",
+  (scenario) =>
+    Effect.gen(function* () {
+      const namingAttempted = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        serverSettings: {
+          branchNamePrefix: "global-prefix",
+          projectSettingsOverrides: {
+            [projectId]: { branchNamingMode: "static", branchNamePrefix: scenario.prefix },
+          },
         },
-      },
-      hasCommit: ({ refName }) => Effect.succeed(refName === `refs/heads/${scenario.collision}`),
-      generateBranchName: () =>
-        Deferred.succeed(namingAttempted, undefined).pipe(
-          Effect.andThen(
-            Effect.fail(
-              new TextGenerationError({ operation: "generateBranchName", detail: "Unavailable" }),
+        hasCommit: ({ refName }) => Effect.succeed(refName === `refs/heads/${scenario.collision}`),
+        generateBranchName: () =>
+          Deferred.succeed(namingAttempted, undefined).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new TextGenerationError({ operation: "generateBranchName", detail: "Unavailable" }),
+              ),
             ),
           ),
-        ),
-    });
-    yield* Effect.gen(function* () {
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const launched = yield* launches.launch(
-        launchInput({
-          command: "prefix-launch",
-          thread: "prefix-thread",
-          message: "Fix the parser",
-          workspace: { type: "worktree", baseRef: "main" },
-        }),
-      );
-      const projection = yield* preparationSettled(launched.threadId);
-      assert.match(projection.thread.branch!, scenario.expected);
-      yield* Deferred.await(namingAttempted);
-      assert.equal(projection.runs[0]?.status, "starting");
-      assert.equal(harness.createWorktree.mock.calls[0]?.[0]?.newRefName, projection.thread.branch);
-      assert.equal(harness.renameBranch.mock.calls.length, 0);
-      assert.isFalse(projection.turnItems.some((item) => item.type === "error"));
-    }).pipe(Effect.provide(harness.layer));
-  }),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const launched = yield* launches.launch(
+          launchInput({
+            command: "prefix-launch",
+            thread: "prefix-thread",
+            message: "Fix the parser",
+            workspace: { type: "worktree", baseRef: "main" },
+          }),
+        );
+        const projection = yield* preparationSettled(launched.threadId);
+        yield* Deferred.await(namingAttempted);
+        // "New thread" is no name, so the first message names folder and branch.
+        const expected = `${scenario.prefix}/fix-the-parser`;
+        assert.equal(projection.thread.branch, expected);
+        assert.equal(projection.runs[0]?.status, "starting");
+        const [worktreeInput, worktreeOptions] = harness.createWorktree.mock.calls[0]!;
+        assert.match(worktreeInput.newRefName ?? "", scenario.temporary);
+        assert.equal(worktreeOptions?.folderBranch, expected);
+        assert.equal(harness.renameBranch.mock.calls[0]?.[0].newBranch, expected);
+        assert.isFalse(projection.turnItems.some((item) => item.type === "error"));
+      }).pipe(Effect.provide(harness.layer));
+    }),
 );
 
-it.effect(
-  "starts a worktree with the default temporary name when settings secrets cannot be read",
-  () => {
-    const harness = makeHarness({
-      getLaunchSettings: Effect.fail(
-        new ServerSettingsError({ settingsPath: "/settings.json", operation: "read-secret" }),
-      ),
-    });
-    return Effect.gen(function* () {
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const launched = yield* launches.launch(
-        launchInput({
-          command: "settings-fallback",
-          thread: "settings-fallback-thread",
-          message: "Fix the parser",
-          workspace: { type: "worktree", baseRef: "main" },
-        }),
-      );
-      const projection = yield* preparationSettled(launched.threadId);
-      assert.equal(projection.runs[0]?.status, "starting");
-      assert.match(projection.thread.branch!, /^t3\/[0-9a-f]{8}$/);
-      assert.equal(harness.createWorktree.mock.calls[0]?.[0]?.newRefName, projection.thread.branch);
-      assert.equal(harness.runSetup.mock.calls.length, 1);
-      assert.equal(harness.renameBranch.mock.calls.length, 0);
-      assert.isFalse(projection.turnItems.some((item) => item.type === "error"));
-    }).pipe(Effect.provide(harness.layer));
-  },
-);
+it.effect("names a worktree under the default prefix when settings secrets cannot be read", () => {
+  const harness = makeHarness({
+    getLaunchSettings: Effect.fail(
+      new ServerSettingsError({ settingsPath: "/settings.json", operation: "read-secret" }),
+    ),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const launched = yield* launches.launch(
+      launchInput({
+        command: "settings-fallback",
+        thread: "settings-fallback-thread",
+        message: "Fix the parser",
+        workspace: { type: "worktree", baseRef: "main" },
+      }),
+    );
+    const projection = yield* preparationSettled(launched.threadId);
+    assert.equal(projection.runs[0]?.status, "starting");
+    assert.equal(projection.thread.branch, "t3/fix-the-parser");
+    assert.match(harness.createWorktree.mock.calls[0]?.[0]?.newRefName ?? "", /^t3\/[0-9a-f]{8}$/);
+    assert.equal(harness.createWorktree.mock.calls[0]?.[1]?.folderBranch, "t3/fix-the-parser");
+    assert.equal(harness.runSetup.mock.calls.length, 1);
+    assert.isFalse(projection.turnItems.some((item) => item.type === "error"));
+  }).pipe(Effect.provide(harness.layer));
+});
 
 it.effect("renames a temporary branch with a configured prefix when generation succeeds", () => {
   const harness = makeHarness({
@@ -1301,6 +1304,49 @@ it.effect("renames a temporary branch with a configured prefix when generation s
       harness.renameBranch.mock.calls[0]?.[0]?.oldBranch ?? "",
       /^my-prefix\/[0-9a-f]{8}$/,
     );
+    // The folder already carries the generated name, not the temporary one.
+    assert.equal(harness.createWorktree.mock.calls[0]?.[1]?.folderBranch, "my-prefix/fix-parser");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect.each([
+  { title: "Fix login redirect", expected: "t3/fix-login-redirect" },
+  { title: "New thread", expected: null },
+])("names a worktree thread without a message after its title '$title'", (scenario) => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const launched = yield* launches.launch({
+      ...launchInput({
+        command: `title-name:${scenario.title}`,
+        thread: `title-name-thread:${scenario.title}`,
+        workspace: { type: "worktree", baseRef: "main" },
+      }),
+      title: scenario.title,
+    });
+    // Without a message there is no run to release; wait for the worktree, then its name.
+    yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
+      Stream.filter(
+        (stored) =>
+          stored.commandId?.endsWith(
+            scenario.expected === null ? ":workspace" : ":branch-rename",
+          ) === true,
+      ),
+      Stream.runHead,
+    );
+    const projection = yield* threads.getThreadProjection(launched.threadId);
+    // No message means no model call; the title alone names folder and branch.
+    assert.equal(harness.generateBranchName.mock.calls.length, 0);
+    if (scenario.expected === null) {
+      // A placeholder title names nothing, so the temporary name stays.
+      assert.match(projection.thread.branch!, /^t3\/[0-9a-f]{8}$/);
+      assert.isUndefined(harness.createWorktree.mock.calls[0]?.[1]?.folderBranch);
+      assert.equal(harness.renameBranch.mock.calls.length, 0);
+    } else {
+      assert.equal(projection.thread.branch, scenario.expected);
+      assert.equal(harness.createWorktree.mock.calls[0]?.[1]?.folderBranch, scenario.expected);
+    }
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -3592,9 +3638,8 @@ it.effect(
     }),
 );
 
-it.effect("stops an in-flight branch rename when tracked setup is cancelled", () =>
+it.effect("stops an in-flight branch name when setup is cancelled before checkout", () =>
   Effect.gen(function* () {
-    const setupEntered = yield* Deferred.make<void>();
     const branchNameStarted = yield* Deferred.make<void>();
     const allowBranchName = yield* Deferred.make<void>();
     const branchNameInterrupted = yield* Deferred.make<void>();
@@ -3602,7 +3647,6 @@ it.effect("stops an in-flight branch rename when tracked setup is cancelled", ()
     const harness = makeHarness({
       renameBranch: (input) =>
         Deferred.succeed(renameAttempted, undefined).pipe(Effect.as({ branch: input.newBranch })),
-      runSetup: () => Deferred.succeed(setupEntered, undefined).pipe(Effect.andThen(Effect.never)),
       generateBranchName: () =>
         Deferred.succeed(branchNameStarted, undefined).pipe(
           Effect.andThen(Deferred.await(allowBranchName)),
@@ -3622,7 +3666,7 @@ it.effect("stops an in-flight branch rename when tracked setup is cancelled", ()
           workspace: { type: "worktree", baseRef: "main" },
         }),
       );
-      yield* Deferred.await(setupEntered);
+      // The checkout waits for the name, so the cancel lands before any worktree exists.
       yield* Deferred.await(branchNameStarted);
       assert.isTrue(yield* tracker.cancel(launched.threadId));
       yield* Deferred.succeed(allowBranchName, undefined);
@@ -3636,10 +3680,7 @@ it.effect("stops an in-flight branch rename when tracked setup is cancelled", ()
       );
       assert.equal(harness.renameBranch.mock.calls.length, 0);
       assert.isNull((yield* threads.getThreadProjection(launched.threadId)).thread.worktreePath);
-      assert.equal(
-        harness.deleteLocalBranch.mock.calls[0]?.[0].refName,
-        harness.createWorktree.mock.calls[0]?.[0].newRefName,
-      );
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
     }).pipe(Effect.provide(harness.layer));
   }),
 );
@@ -3664,7 +3705,6 @@ it.effect("starts the agent of a new worktree thread only after its branch is re
     });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
       const outbox = yield* EffectOutbox.EffectOutboxV2;
       const input = launchInput({
         command: "launch:release-after-rename",
@@ -3675,17 +3715,8 @@ it.effect("starts the agent of a new worktree thread only after its branch is re
       releaseEffects = outbox
         .listByCommandId(CommandId.make(`${input.commandId}:release`))
         .pipe(Effect.orDie);
-      const launched = yield* launches.launch(input);
+      yield* launches.launch(input);
       yield* Deferred.await(branchNameStarted);
-      yield* tracker.stream(launched.threadId).pipe(
-        Stream.filter(
-          (snapshot) =>
-            snapshot?.stages.some(
-              (stage) => stage.id === "setup-script" && stage.status === "skipped",
-            ) === true,
-        ),
-        Stream.runHead,
-      );
       yield* Deferred.succeed(allowBranchName, undefined);
       assert.isFalse(
         yield* Deferred.await(releasedAtRename),
@@ -3735,11 +3766,15 @@ it.effect("names a new worktree thread's branch while its worktree is being crea
 it.effect("tells the thread when its worktree branch could not be renamed", () =>
   Effect.gen(function* () {
     const harness = makeHarness({
-      generateBranchName: () =>
+      generateBranchName: () => Effect.succeed({ branch: "generated-branch" }),
+      renameBranch: (input) =>
         Effect.fail(
-          new TextGenerationError({
-            operation: "generateBranchName",
-            detail: "Failed to spawn Codex CLI process",
+          new GitCommandError({
+            operation: "GitVcsDriver.renameBranch",
+            command: "git",
+            cwd: input.cwd,
+            detail: "cannot lock ref",
+            exitCode: 128,
           }),
         ),
     });
@@ -3764,13 +3799,14 @@ it.effect("tells the thread when its worktree branch could not be renamed", () =
       assert.equal(notice?.type === "system_notice" ? notice.runId : null, projection.runs[0]?.id);
       assert.include(
         notice?.type === "system_notice" ? notice.message : "",
-        `stays ${projection.thread.branch}. Text generation failed in generateBranchName: Failed to spawn Codex CLI process`,
+        `stays ${projection.thread.branch}.`,
       );
+      assert.include(notice?.type === "system_notice" ? notice.message : "", "cannot lock ref");
     }).pipe(Effect.provide(harness.layer));
   }),
 );
 
-it.effect("starts the agent on the temporary branch when branch naming hangs", () =>
+it.effect("names the worktree after the first message when branch naming hangs", () =>
   Effect.gen(function* () {
     const branchNameStarted = yield* Deferred.make<void>();
     const harness = makeHarness({
@@ -3791,18 +3827,16 @@ it.effect("starts the agent on the temporary branch when branch naming hangs", (
         }),
       );
       yield* Deferred.await(branchNameStarted);
-      yield* TestClock.adjust("20 seconds");
+      yield* TestClock.adjust("5 seconds");
       yield* tracker.stream(launched.threadId).pipe(
         Stream.filter((snapshot) => snapshot?.phase === "done"),
         Stream.runHead,
       );
-      assert.equal(harness.renameBranch.mock.calls.length, 0);
       const projection = yield* threads.getThreadProjection(launched.threadId);
-      const notice = projection.turnItems.find((item) => item.type === "system_notice");
-      assert.include(
-        notice?.type === "system_notice" ? notice.message : "",
-        `stays ${projection.thread.branch}. Text generation failed in generateBranchName: Timed out after 20 seconds.`,
-      );
+      assert.equal(projection.thread.branch, "t3/start");
+      assert.equal(harness.createWorktree.mock.calls[0]?.[1]?.folderBranch, "t3/start");
+      assert.equal(harness.renameBranch.mock.calls[0]?.[0].newBranch, "t3/start");
+      assert.isFalse(projection.turnItems.some((item) => item.type === "system_notice"));
     }).pipe(Effect.provide(harness.layer));
   }),
 );
@@ -3941,11 +3975,16 @@ it.effect.each([0, 1])("releases an async setup before its completion with exit 
   }),
 );
 
-it.effect("shows an async setup as done while the agent still waits for its branch name", () =>
+it.effect("shows an async setup as done while the agent still waits for its branch rename", () =>
   Effect.gen(function* () {
     const branchNameStarted = yield* Deferred.make<void>();
     const allowBranchName = yield* Deferred.make<void>();
     const harness = makeHarness({
+      renameBranch: (input) =>
+        Deferred.succeed(branchNameStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(allowBranchName)),
+          Effect.as({ branch: input.newBranch }),
+        ),
       runSetup: () =>
         Effect.succeed({
           status: "started" as const,
@@ -3957,11 +3996,7 @@ it.effect("shows an async setup as done while the agent still waits for its bran
           cwd: "/repo-worktrees/feature",
           completion: Effect.succeed({ exitCode: 0, durationMs: 1 }),
         }),
-      generateBranchName: () =>
-        Deferred.succeed(branchNameStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(allowBranchName)),
-          Effect.as({ branch: "generated-branch" }),
-        ),
+      generateBranchName: () => Effect.succeed({ branch: "generated-branch" }),
     });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;

@@ -8061,10 +8061,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           pathService.dirname(created.worktree.path),
           pathService.join(worktreesDirectory, pathService.basename(cwd)),
         );
-        assert.match(
-          pathService.basename(created.worktree.path),
-          /^feature-custom-dir-[0-9a-f]{16}$/,
-        );
+        // A short branch names its folder as it reads.
+        assert.equal(pathService.basename(created.worktree.path), "feature-custom-dir");
         assert.equal(yield* fileSystem.exists(created.worktree.path), true);
 
         yield* git(cwd, ["worktree", "remove", "--force", created.worktree.path]);
@@ -8076,7 +8074,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           { cwd, path: null, refName: initialBranch, newRefName: "feature/custom-dir" },
           { worktreesDirectory },
         );
-        assert.notEqual(recreated.worktree.path, created.worktree.path);
+        assert.equal(recreated.worktree.path, `${created.worktree.path}-2`);
         assert.equal(
           yield* git(recreated.worktree.path, ["branch", "--show-current"]),
           "feature/custom-dir",
@@ -8126,6 +8124,50 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           }
           assert.equal(paths.size, 4);
         }),
+    );
+
+    it.effect("names the folder after the branch a launch will rename to", () =>
+      Effect.gen(function* () {
+        const pathService = yield* Path.Path;
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const worktreesDirectory = yield* makeTmpDir("custom-worktrees-");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const created = yield* driver.createWorktree(
+          { cwd, path: null, refName: initialBranch, newRefName: "t3/0a1b2c3d" },
+          { worktreesDirectory, folderBranch: "t3/fix-login-redirect" },
+        );
+        assert.equal(pathService.basename(created.worktree.path), "t3-fix-login-redirect");
+        assert.equal(
+          yield* git(created.worktree.path, ["branch", "--show-current"]),
+          "t3/0a1b2c3d",
+        );
+      }),
+    );
+
+    it.effect("gives parallel launches that pick one name their own folders", () =>
+      Effect.gen(function* () {
+        const pathService = yield* Path.Path;
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const worktreesDirectory = yield* makeTmpDir("custom-worktrees-");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const created = yield* Effect.forEach(
+          ["t3/00000001", "t3/00000002", "t3/00000003"],
+          (newRefName) =>
+            driver.createWorktree(
+              { cwd, path: null, refName: initialBranch, newRefName },
+              { worktreesDirectory, folderBranch: "t3/same-name" },
+            ),
+          { concurrency: "unbounded" },
+        );
+        assert.deepEqual(
+          created.map((result) => pathService.basename(result.worktree.path)).toSorted(),
+          ["t3-same-name", "t3-same-name-2", "t3-same-name-3"],
+        );
+      }),
     );
 
     it.effect("keeps generated worktree folders short without changing long branch names", () =>
