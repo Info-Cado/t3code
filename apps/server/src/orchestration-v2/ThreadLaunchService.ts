@@ -46,6 +46,8 @@ import {
   flattenTemporaryWorktreeBranchName,
   formatGeneratedBranchName,
   isTemporaryWorktreeBranch,
+  sanitizeBranchFragment,
+  WORKTREE_BRANCH_PREFIX,
 } from "@t3tools/shared/git";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
@@ -67,9 +69,13 @@ import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { DispatchModeLimit } from "./DispatchModeLimit.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as TaskFolders from "../workspace/TaskFolders.ts";
+import { isPlaceholderThreadTitle } from "./placeholderThreadTitle.ts";
 
 // The agent waits for its branch name; a rate-limited provider would hold it for minutes.
 const BRANCH_NAME_TIMEOUT = "20 seconds";
+// A new worktree's folder is named after the branch the thread will get; checkout waits this long
+// for it before naming both after the thread's title instead.
+const BRANCH_NAME_WAIT = "5 seconds";
 
 export type ThreadLaunchWorkspaceStrategy =
   | { readonly type: "root"; readonly branch?: string | undefined }
@@ -133,6 +139,8 @@ type PreparationInput = Pick<
   ThreadLaunchInput,
   "commandId" | "projectId" | "workspaceStrategy" | "initialMessage" | "linkOrigin"
 > & {
+  /** The thread's title, which names a new worktree's branch when no name is generated. */
+  readonly title?: string;
   readonly reusedWorktree?: { readonly baseRef: string };
   /** Set when an agent asked for this run, with the thread it asked from if it has one. */
   readonly askedByAgent?: { readonly threadId: ThreadId | undefined };
@@ -716,6 +724,34 @@ const make = Effect.gen(function* () {
             ).pipe(Effect.forkIn(preparationScope))
           : null;
       if (branchName !== null) stopBranchName = Fiber.interrupt(branchName);
+      // Without a generated name, the thread's title (else its first message) names the branch.
+      const titleBranchName = Effect.fn("ThreadLaunchService.titleBranchName")(function* () {
+        const title = input.title?.trim() ?? "";
+        const text =
+          title !== "" && title !== "New thread" && !isPlaceholderThreadTitle(title)
+            ? title
+            : (initialMessage?.text.trim() ?? "");
+        const words = text.split(/\s+/).slice(0, 6).join(" ");
+        // A title with no Latin letters or digits would only give the fallback "update".
+        if (words === "" || sanitizeBranchFragment(words) === "update") return null;
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => resolveProjectSettings(settings, input.projectId).settings),
+          Effect.orElseSucceed(() => null),
+        );
+        return {
+          branch: formatGeneratedBranchName(words, {
+            // A custom pattern needs the model; the title gets the plain form. Unread settings
+            // mean the defaults: static, under the t3 prefix.
+            mode:
+              settings === null || settings.branchNamingMode === "static" ? "static" : "semantic",
+            prefix: settings?.branchNamePrefix ?? WORKTREE_BRANCH_PREFIX,
+            instructions: "",
+          }),
+          exactName: false,
+        };
+      });
+      // The name a new worktree's folder and branch get, once chosen.
+      let chosenName: { readonly branch: string; readonly exactName: boolean } | null = null;
       if (input.workspaceStrategy.type === "worktree") {
         const taskPlan = yield* taskFolders
           .plan({ projectId: project.id, repositories: input.workspaceStrategy.repositories })
@@ -816,6 +852,30 @@ const make = Effect.gen(function* () {
             }
           }
         }
+        if (
+          reused === undefined &&
+          branch !== null &&
+          (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))
+        ) {
+          const ready =
+            branchName === null
+              ? Option.none()
+              : yield* Fiber.await(branchName).pipe(Effect.timeoutOption(BRANCH_NAME_WAIT));
+          const exit = Option.getOrUndefined(ready);
+          if (exit !== undefined && Exit.isSuccess(exit)) {
+            chosenName = exit.value;
+          } else {
+            if (exit !== undefined && Exit.isFailure(exit)) {
+              yield* Effect.logWarning("Branch name generation failed; using the thread title", {
+                threadId,
+                cause: exit.cause,
+              });
+            }
+            // One name for folder and branch: a late generated name must not rename only one.
+            yield* stopBranchName;
+            chosenName = yield* titleBranchName();
+          }
+        }
         yield* setupTracker.stageStatus(threadId, "checkout", "running");
         let submoduleProgressReportedAt = Number.NEGATIVE_INFINITY;
         const progress: GitVcsDriver.CreateWorktreeProgress = {
@@ -868,7 +928,10 @@ const make = Effect.gen(function* () {
                     baseRefName,
                     path: null,
                   },
-                  { progress },
+                  {
+                    progress,
+                    ...(chosenName === null ? {} : { folderBranch: chosenName.branch }),
+                  },
                 )
                 .pipe(
                   Effect.catchIf(
@@ -890,6 +953,7 @@ const make = Effect.gen(function* () {
                 .create({
                   plan: taskPlan,
                   branch: branch!,
+                  folderBranch: chosenName?.branch,
                   projectStart: { refName: startRef, baseRefName },
                   baseBranch: input.workspaceStrategy.baseRef,
                   startFromOrigin: input.workspaceStrategy.startFromOrigin === true,
@@ -948,15 +1012,17 @@ const make = Effect.gen(function* () {
         reused === undefined &&
         worktreePath !== null &&
         branch !== null &&
-        initialMessage !== undefined &&
+        (chosenName !== null || initialMessage !== undefined) &&
         (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))
       ) {
         const oldBranch = branch;
         const worktreeCwd = worktreePath;
         const generatedName =
-          branchName === null
-            ? generateBranchNameFor(worktreeCwd, initialMessage)
-            : Fiber.join(branchName);
+          chosenName !== null
+            ? Effect.succeed(chosenName)
+            : branchName === null
+              ? generateBranchNameFor(worktreeCwd, initialMessage!)
+              : Fiber.join(branchName);
         branchRename = yield* generatedName.pipe(
           Effect.flatMap(({ branch: newBranch, exactName }) =>
             Effect.suspend(
@@ -1777,6 +1843,7 @@ const make = Effect.gen(function* () {
       {
         commandId: input.commandId,
         projectId: thread.projectId,
+        title: thread.title,
         workspaceStrategy: reuse?.strategy ?? workspacePreparation,
         ...(thread.linkOrigin === undefined ? {} : { linkOrigin: thread.linkOrigin }),
         ...askedByAgent(thread, message),

@@ -95,3 +95,23 @@ export const makeIsManagedWorktreePath = Effect.gen(function* () {
     });
   });
 });
+
+const MAX_WORKTREE_FOLDER_BYTES = 40;
+
+/**
+ * A worktree folder's name: its branch, readable, with `/` as `-`. A branch too long for that
+ * (UTF-8 bytes also bound UTF-16 length, leaving room for files beneath it on Windows) keeps its
+ * start and gains `-` plus 8 characters of `hashHex`, so long branches that start alike differ.
+ * Callers add `-2`, `-3`… when the folder is taken.
+ */
+export function worktreeFolderName(branch: string, hashHex: string): string {
+  const readable = branch.replace(/\//g, "-");
+  if (Buffer.byteLength(readable) <= MAX_WORKTREE_FOLDER_BYTES) return readable;
+  const code = hashHex.slice(0, 8);
+  let prefix = "";
+  for (const character of readable) {
+    if (Buffer.byteLength(prefix + character) > MAX_WORKTREE_FOLDER_BYTES - code.length - 1) break;
+    prefix += character;
+  }
+  return `${prefix.replace(/[-_.]+$/, "")}-${code}`;
+}

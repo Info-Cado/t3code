@@ -35,6 +35,7 @@ import {
   type ReviewDiffFileStat,
   type ReviewDiffPreviewSource,
   trimAsciiWhitespace,
+  type VcsCreateWorktreeInput,
   type VcsRef,
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
@@ -51,7 +52,7 @@ import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
 import { gitConfigEnv, serverGitConfigEnv, unsetInheritedRepositoryEnv } from "./VcsProcess.ts";
 import { makeWorktreeCheckoutCache } from "./worktreeCheckoutCache.ts";
 import { removeLinkedWorktree } from "./worktreeRemoval.ts";
-import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
+import { resolveWorktreesDirectory, worktreeFolderName } from "../worktreesDirectory.ts";
 import {
   parseRemoteNames,
   parseRemoteNamesInGitOrder,
@@ -5919,6 +5920,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
   });
 
+  // Folders a creation in this server has picked but git has not made yet.
+  const reservedWorktreePaths = new Set<string>();
+
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
   )(function* (input, options) {
@@ -5928,6 +5932,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // Resolve sub/.. before taking the basename.
     const repoName = path.basename(path.resolve(input.cwd));
     let worktreePath = input.path;
+    let reservedPath: string | null = null;
     if (worktreePath == null) {
       const parentDir = resolveWorktreesDirectory(
         options?.worktreesDirectory ?? "",
@@ -5943,27 +5948,48 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           detail: `The worktree location "${options?.worktreesDirectory}" must be an absolute folder on this machine, not a drive root. Change it in Settings → Worktrees.`,
         });
       }
-      const identity = `${yield* readGitCommonDir(input.cwd)}\0${targetBranch}`;
+      // A launch still on its temporary branch names the folder after the branch it will get.
+      const folderBranch = options?.folderBranch ?? targetBranch;
+      const identity = `${yield* readGitCommonDir(input.cwd)}\0${folderBranch}`;
       const hash = yield* digest.digest(Digest.sha256, new TextEncoder().encode(identity));
-      // UTF-8 bytes bound UTF-16 length too, leaving room for files on Windows.
-      let prefix = "";
-      for (const character of targetBranch.replace(/\//g, "-")) {
-        if (Buffer.byteLength(prefix + character) > 23) break;
-        prefix += character;
-      }
-      const basePath = path.join(parentDir, repoName, `${prefix}-${Hex.encode(hash).slice(0, 16)}`);
-      // The name is stable per branch, so a folder left by an earlier worktree must not block it.
+      const basePath = path.join(
+        parentDir,
+        repoName,
+        worktreeFolderName(folderBranch, Hex.encode(hash)),
+      );
+      // A folder left by an earlier worktree, or one a parallel launch is about to make, is taken.
       worktreePath = basePath;
-      for (
-        let suffix = 2;
-        yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => false));
-        suffix++
-      ) {
+      for (let suffix = 2; ; suffix++) {
+        if (!reservedWorktreePaths.has(worktreePath)) {
+          reservedWorktreePaths.add(worktreePath);
+          if (!(yield* fileSystem.exists(worktreePath).pipe(Effect.orElseSucceed(() => false)))) {
+            reservedPath = worktreePath;
+            break;
+          }
+          reservedWorktreePaths.delete(worktreePath);
+        }
         worktreePath = `${basePath}-${suffix}`;
       }
     }
+    const reserved = reservedPath;
+    return yield* createWorktreeAt(input, options, worktreePath).pipe(
+      // Once git has made the folder, it is taken on disk.
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (reserved !== null) reservedWorktreePaths.delete(reserved);
+        }),
+      ),
+    );
+  });
+
+  const createWorktreeAt = Effect.fnUntraced(function* (
+    input: VcsCreateWorktreeInput,
+    options: GitVcsDriver.CreateWorktreeOptions | undefined,
+    chosenPath: string,
+  ) {
+    const targetBranch = input.newRefName ?? input.refName;
     // Later steps run git inside the worktree, so resolve a relative path the way worktree add does.
-    worktreePath = path.resolve(input.cwd, worktreePath);
+    const worktreePath = path.resolve(input.cwd, chosenPath);
     // Read before the branch exists, so a missing pattern file leaves nothing behind.
     const sparsePatterns = yield* readWorktreeSparsePatterns(input.cwd, input.refName);
     const newRefName = input.newRefName;

@@ -51,7 +51,7 @@ import {
   removeEmptyDirectory,
   type RemoveEmptyDirectoryError,
 } from "../vcs/removeEmptyDirectory.ts";
-import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
+import { resolveWorktreesDirectory, worktreeFolderName } from "../worktreesDirectory.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import * as LayoutCommandApprovals from "./LayoutCommandApprovals.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
@@ -107,6 +107,8 @@ export class TaskFolders extends Context.Service<
     readonly create: (input: {
       readonly plan: TaskFolderPlan;
       readonly branch: string;
+      /** Name the folder after this branch, not `branch` (renamed to it later). */
+      readonly folderBranch?: string | undefined;
       /** Where the project folder's branch starts; unused when it is not a repository. */
       readonly projectStart: { readonly refName: string; readonly baseRefName: string };
       /**
@@ -827,16 +829,10 @@ const make = Effect.gen(function* () {
       Digest.sha256,
       new TextEncoder().encode(`${taskPlan.projectId}\0${taskPlan.anchor}\0${branch}`),
     );
-    // UTF-8 bytes bound UTF-16 length too, leaving room for files on Windows.
-    let prefix = "";
-    for (const character of branch.replace(/\//g, "-")) {
-      if (Buffer.byteLength(prefix + character) > 23) break;
-      prefix += character;
-    }
     const base = path.join(
       parent,
       path.basename(taskPlan.anchor) || "workspace",
-      `${prefix}-${Hex.encode(hash).slice(0, 16)}`,
+      worktreeFolderName(branch, Hex.encode(hash)),
     );
     const allocateFailed = fail("create", "Could not create the worktree folder");
     yield* fileSystem
@@ -1111,7 +1107,7 @@ const make = Effect.gen(function* () {
       const branch = projectNames.some((existing) => collides(existing, requested))
         ? requested
         : yield* freeBranchName("create", requested, [...names, projectNames]);
-      const root = yield* allocateRoot(taskPlan, branch);
+      const root = yield* allocateRoot(taskPlan, input.folderBranch ?? branch);
       const empty: TaskFolder = {
         root,
         projectId: taskPlan.projectId,

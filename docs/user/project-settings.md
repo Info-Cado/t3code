@@ -79,9 +79,16 @@ are replaced with hyphens. Custom instructions are appended to
 the naming prompt and can specify issue IDs, namespaces, and casing.
 
 These settings apply to automatically named new worktree branches. Select a project
-to override its environment defaults. Worktree directories keep their original names.
-If generation fails, or a custom name is invalid or already taken, the temporary
-branch name remains.
+to override its environment defaults.
+
+A new worktree's folder is named after its branch, with `/` as `-`: `t3/fix-login`
+gets the folder `t3-fix-login`. T3 waits up to 5 seconds for the generated name
+before it checks out, so the folder and branch match. If generation fails or takes
+longer, the thread's title names both, or the first words of its first message when
+the title is still `New thread`. A long name keeps its start plus a short code, and
+a folder already in use gets `-2`, `-3`, and so on. If a custom name is invalid or
+already taken, the temporary branch name remains. Renaming a branch later does not
+move its folder.
 
 ## Scheduled tasks on mobile
 
